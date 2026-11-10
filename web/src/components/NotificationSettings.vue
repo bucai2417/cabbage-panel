@@ -1,0 +1,25 @@
+<script setup>
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { api, toast } from '../api'
+import { confirmDiscard } from '../dialogs'
+import { registerLeaveGuard } from '../guard'
+import Icon from './Icon.vue'
+const config = ref({ notifyFailures: true, channels: [] }), saved = ref(''), busy = ref(false), results = ref([]), loaded = ref(false)
+const types = { webhook: '通用 Webhook', wecom: '企业微信机器人', dingtalk: '钉钉机器人', feishu: '飞书机器人', bark: 'Bark', telegram: 'Telegram', pushplus: 'PushPlus', serverchan: 'Server酱（SCT）' }
+const hints = { wecom: 'QYWX_KEY', dingtalk: 'DD_BOT_TOKEN / DD_BOT_SECRET', feishu: 'FSKEY / FSSECRET', bark: 'BARK_PUSH（设备码）', telegram: 'TG_BOT_TOKEN / TG_USER_ID', pushplus: 'PUSH_PLUS_TOKEN', serverchan: 'PUSH_KEY（SCT SendKey）', webhook: 'WEBHOOK_URL' }
+const dirty = computed(() => loaded.value && JSON.stringify(config.value) !== saved.value)
+let unregisterGuard = () => {}
+onMounted(async () => { unregisterGuard = registerLeaveGuard(canLeave); window.addEventListener('beforeunload', unload); try { config.value = await api('/system/notifications'); saved.value = JSON.stringify(config.value); loaded.value = true } catch (error) { toast(error.message, 'error') } })
+function add() { config.value.channels.push({ type: 'webhook', name: '新通知渠道', enabled: false, url: '', token: '', secret: '', chatId: '' }) }
+async function save(test = false) { if (busy.value || !loaded.value) return; busy.value = true; try { const snapshot = JSON.stringify(config.value); await api('/system/notifications', 'PUT', JSON.parse(snapshot)); saved.value = snapshot; toast('通知配置已保存'); if (test) { results.value = await api('/system/notifications', 'POST'); if (!results.value.length) toast('请先启用至少一个通知渠道', 'error') } } catch (error) { toast(error.message, 'error') } finally { busy.value = false } }
+async function canLeave() {
+  return !dirty.value || await confirmDiscard({
+    title: '放弃未保存的通知配置？',
+    message: '通知渠道有尚未保存的修改，离开后这些修改会丢失。',
+  })
+}
+function unload(event) { if (dirty.value) { event.preventDefault(); event.returnValue = '' } }
+onBeforeUnmount(() => { window.removeEventListener('beforeunload', unload); unregisterGuard() })
+defineExpose({ canLeave, dirty })
+</script>
+<template><section class="card notification-settings"><div class="card-heading"><div><h2><Icon name="Bell" :size="19" />内置通知配置</h2><p class="muted">支持多个渠道并发推送。表单与 notifications.json 同步。</p></div><button class="button compact" :disabled="!loaded || busy || config.channels.length >= 16" @click="add"><Icon name="Plus" :size="15" />添加渠道</button></div><div class="notification-body"><label class="inline-check"><input v-model="config.notifyFailures" :disabled="busy" type="checkbox" />任务执行失败时自动通知</label><p v-if="!config.channels.length" class="muted">尚未配置通知。添加渠道后，填写凭证并启用即可发送。</p><fieldset v-for="(channel, index) in config.channels" :key="index" class="notification-channel" :disabled="busy"><legend>{{ index + 1 }} · {{ types[channel.type] }}</legend><div class="channel-heading"><label class="inline-check"><input v-model="channel.enabled" type="checkbox" />启用</label><span class="muted">青龙对应字段：{{ hints[channel.type] }}</span><button type="button" class="icon-button danger" :aria-label="'删除通知渠道' + (index + 1)" @click="config.channels.splice(index, 1)"><Icon name="Trash2" :size="16" /></button></div><div class="settings-fields channel-fields"><label class="field"><span>渠道类型</span><select v-model="channel.type" :aria-label="'渠道类型' + (index + 1)"><option v-for="(label, value) in types" :key="value" :value="value">{{ label }}</option></select></label><label class="field"><span>渠道名称</span><input v-model="channel.name" :aria-label="'渠道名称' + (index + 1)" /></label><label class="field"><span>{{ channel.type === 'telegram' ? 'API 主机（可选）' : '请求 URL（自建地址或完整 Webhook）' }}</span><input v-model="channel.url" :aria-label="'通知地址' + (index + 1)" type="url" placeholder="https://…" autocomplete="off" /><small>留空使用官方服务；通用 Webhook 必填。</small></label><label v-if="channel.type !== 'webhook'" class="field"><span>Token / Key</span><input v-model="channel.token" :aria-label="'通知Token' + (index + 1)" type="password" autocomplete="new-password" /></label><label v-if="['dingtalk', 'feishu'].includes(channel.type)" class="field"><span>签名密钥（可选）</span><input v-model="channel.secret" :aria-label="'签名密钥' + (index + 1)" type="password" autocomplete="new-password" /></label><label v-if="channel.type === 'telegram'" class="field"><span>Chat ID</span><input v-model="channel.chatId" :aria-label="'Chat ID' + (index + 1)" /></label></div></fieldset><div v-for="(result, index) in results" :key="index" class="notification-result" :class="result.success ? 'success-text' : 'danger-text'">{{ result.name || types[result.type] }}：{{ result.success ? '服务已接受通知请求' : result.error }}</div></div><footer><span class="muted grow">{{ dirty ? '有未保存的修改' : '配置已同步' }}</span><button class="button" :disabled="busy || !loaded" @click="save(true)"><Icon name="Send" :size="16" />保存并测试</button><button class="button primary" :disabled="busy || !loaded" @click="save()">保存配置</button></footer></section></template>

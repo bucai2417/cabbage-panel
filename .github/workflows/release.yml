@@ -1,0 +1,70 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { os: linux, arch: amd64, suffix: '' }
+          - { os: linux, arch: arm64, suffix: '' }
+          - { os: windows, arch: amd64, suffix: '.exe' }
+          - { os: darwin, arch: arm64, suffix: '' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Validate version and signing configuration
+        env:
+          PUBLIC_KEY: ${{ vars.CABBAGE_UPDATE_PUBLIC_KEY }}
+        run: |
+          test "$GITHUB_REF_NAME" = "v$(tr -d '\r\n' < VERSION)"
+          test -n "$PUBLIC_KEY"
+      - run: npm --prefix web ci && npm --prefix web run build
+      - run: go test ./... -count=1 -timeout 120s
+      - name: Build release
+        env:
+          GOOS: ${{ matrix.target.os }}
+          GOARCH: ${{ matrix.target.arch }}
+          CGO_ENABLED: '0'
+          CABBAGE_UPDATE_PUBLIC_KEY: ${{ vars.CABBAGE_UPDATE_PUBLIC_KEY }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$(cat VERSION) -X main.commit=$GITHUB_SHA -X main.updateKey=$CABBAGE_UPDATE_PUBLIC_KEY" -o dist/cabbage-${{ matrix.target.os }}-${{ matrix.target.arch }}${{ matrix.target.suffix }} ./cmd/cabbage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cabbage-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          path: dist/*
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: node scripts/package.mjs
+      - run: node scripts/release-sign.mjs dist
+        env:
+          RELEASE_PRIVATE_KEY: ${{ secrets.RELEASE_PRIVATE_KEY }}
+          CABBAGE_UPDATE_PUBLIC_KEY: ${{ vars.CABBAGE_UPDATE_PUBLIC_KEY }}
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp README.md SECURITY.md THIRD_PARTY_NOTICES.md dist/
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "大白菜面板 $GITHUB_REF_NAME"

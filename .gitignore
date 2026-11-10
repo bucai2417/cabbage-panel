@@ -1,0 +1,14 @@
+/data/
+/dist/
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+/.tools/
+*.log
+*.exe
+*.test
+.env
+release-private.key
+/test-results/
+web/test-results/
+web/playwright-report/

@@ -1,0 +1,17 @@
+services:
+  cabbage:
+    build: .
+    image: cabbage-panel:1.1.0
+    container_name: cabbage-panel
+    ports:
+      - "5700:5700"
+    volumes:
+      - cabbage-data:/app/data
+    environment:
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  cabbage-data:

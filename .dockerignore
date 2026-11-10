@@ -1,0 +1,12 @@
+.git
+.tools
+data
+dist
+designs
+web/node_modules
+web/dist
+test-results
+*.exe
+*.log
+*.key
+.env
