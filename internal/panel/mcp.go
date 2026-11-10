@@ -175,7 +175,7 @@ func (app *App) mcp(writer http.ResponseWriter, request *http.Request, principal
 		if selected.Method != "GET" {
 			app.writeMu.Lock()
 		}
-		app.store.audit("mcp "+name, principal)
+		app.store.audit("mcp "+name, principal, clientIP(request), false)
 		app.api(recorder, internal, internal.URL.Path, principal)
 		if selected.Method != "GET" {
 			app.writeMu.Unlock()

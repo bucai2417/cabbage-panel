@@ -18,7 +18,7 @@
 - 订阅：HTTP(S) Git 仓库 / 单文件、分支、Cron 同步、正则白黑名单、自动识别 cron: 注释并创建任务。
 - 依赖：Node.js npm、Python 独立 venv、Linux apt/apk；后台安装、卸载、重装和日志。
 - 监控：真实 CPU、内存、磁盘、面板堆内存、执行统计和最近运行任务。
-- 账户与应用：首次设置密钥、bcrypt、HttpOnly Cookie、过期 token、应用权限和审计。
+- 账户与应用：首次设置密钥、bcrypt、HttpOnly Cookie、应用权限与应用有效期、可在列表中直接查看的 Client Secret、可设置有效期或永久并持久登记的 Authorization（与 Client ID 用途分离）、带 IP 和异地登录红色标记的操作审计；MCP 配置只使用 Authorization。
 - 通知：企业微信、钉钉、飞书、Bark、Telegram、PushPlus、Server酱 SCT、通用 Webhook；支持多渠道并发、签名、逐渠道测试、失败/超时通知，以及 Python/JS/Shell 通知助手。
 - 备份：ZIP 导出 / 导入，恢复前自动备份，数据库事务和文件目录回滚；拒绝路径穿越与符号链接。
 - MCP：POST /mcp，无状态 Streamable HTTP，18 个工具，复用应用和资源权限。

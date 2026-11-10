@@ -120,8 +120,8 @@ func TestAuthScopesAndMCP(test *testing.T) {
 	if _, found := listed[0].(map[string]any)["secret_hash"]; found {
 		test.Fatal("secret hash leaked")
 	}
-	if _, found := listed[0].(map[string]any)["client_secret"]; found {
-		test.Fatal("secret leaked")
+	if text(listed[0].(map[string]any)["client_secret"]) != text(created["client_secret"]) {
+		test.Fatal("client secret is not available for administrators")
 	}
 	status, response := panel.call(test, "GET", "/open/auth/token?client_id="+text(created["client_id"])+"&client_secret="+text(created["client_secret"]), nil, "")
 	if status != 200 {
@@ -146,7 +146,7 @@ func TestAuthScopesAndMCP(test *testing.T) {
 		test.Fatal(response)
 	}
 	status, response = panel.call(test, "GET", "/open/crons", nil, token)
-	if status != 200 || integer(response["data"].(map[string]any)["total"]) != 1 {
+	if status != 200 || len(response["data"].([]any)) != 1 {
 		test.Fatal(response)
 	}
 	panel.data(test, "DELETE", "/api/apps", []int64{integer(created["id"])})

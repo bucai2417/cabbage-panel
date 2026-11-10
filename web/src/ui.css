@@ -338,3 +338,53 @@ body.debug-open{overflow:hidden}
 .task-row{grid-template-columns:22px minmax(0,1fr) 128px 28px}
 .task-actions .icon-button{width:24px;height:28px}
 }
+
+/* 设置页导航固定与开放应用/审计增强 */
+.settings-nav{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 32px);overflow:auto;padding:4px;background:#f5f7fae6;backdrop-filter:blur(8px);border-radius:12px;z-index:5}
+.app-dialog-hint{margin-bottom:0;font-size:11px}
+.scope-field{gap:8px}
+.scope-actions{display:flex;gap:6px;margin-bottom:2px}
+.scope-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%}
+.scope-options label{display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border-radius:8px;background:#fbfdfc;min-width:0;cursor:pointer;transition:border-color .15s,background .15s}
+.scope-options label:hover{background:#f4faf7;border-color:#cfe8da}
+.scope-options label:has(input:checked){background:#eefaf3;border-color:#a9e2c5}
+.scope-options label input[type=checkbox]{width:15px;height:15px;flex:0 0 15px;padding:0;margin:2px 0 0}
+.scope-options label code{font-size:10px;overflow-wrap:anywhere}
+.scope-options label small{font-size:9px;color:#98aa9e;line-height:1.4;overflow-wrap:anywhere}
+.scope-options label>span{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+@media(max-width:700px){.scope-options{grid-template-columns:1fr}}
+.mcp-token-expiry{margin:0;font-size:10px;color:#3c8a64;background:#eef9f2;border:1px solid #dff0e6;border-radius:7px;padding:7px 10px}
+.mcp-token-box{display:flex;flex-direction:column;gap:8px}
+.mcp-token-box textarea{font-family:Consolas,monospace;font-size:10px;line-height:1.5;color:#4f6d5b;background:#f7faf8}
+.mcp-token-box .actions{justify-content:flex-end}
+.token-form select{min-width:120px}
+.audit-remote{background:#fff7f5}
+.audit-remote td{border-bottom-color:#f7e3df}
+.audit-ip{white-space:nowrap;font-size:11px;color:#7b8d81}
+.audit-ip.remote{color:#d94a41;font-weight:600}
+.audit-badge{margin-left:7px}
+
+/* 开放应用卡片列表 */
+.app-list-toolbar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-bottom:1px solid #eef3ef;font-size:11px;color:#7f9388}
+.app-list{padding:0 12px 8px}
+.app-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 8px;border-bottom:1px solid #f1f5f2;border-radius:8px}
+.app-row:last-child{border-bottom:0}
+.app-main{min-width:0;display:flex;flex-direction:column;gap:5px}
+.app-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.app-title strong{font-size:13px;color:#334f3f}
+.app-title .badge{font-size:9px}
+.app-client{font-size:10px;color:#8ea295;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.app-actions{display:flex;gap:2px;flex-wrap:wrap;justify-content:flex-end}
+.app-row.expired{background:#fff7f5}
+.app-row.expired .app-title strong{color:#b06057}
+.app-row.selected-row{background:#ecf8f1}
+.app-row.expired.selected-row{background:#fff0ed}
+
+@media(max-width:900px){
+.app-row{grid-template-columns:auto minmax(0,1fr)}
+.app-actions{grid-column:2;justify-content:flex-start}
+}
+
+@media(max-width:1100px){
+.settings-nav{top:8px;flex-direction:row;flex-wrap:wrap;max-height:none;margin-bottom:4px;background:#f5f7faf2;z-index:6}
+}

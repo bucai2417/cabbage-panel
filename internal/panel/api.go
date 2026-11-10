@@ -43,7 +43,7 @@ func (app *App) api(writer http.ResponseWriter, request *http.Request, path, pri
 			fail(writer, 405, "方法不支持")
 			return
 		}
-		rows, err := app.store.db.Query("SELECT id,action,actor,created FROM audit ORDER BY id DESC LIMIT 200")
+		rows, err := app.store.db.Query("SELECT id,action,actor,created,ip,remote FROM audit ORDER BY id DESC LIMIT 200")
 		if err != nil {
 			apiError(writer, err)
 			return
@@ -51,10 +51,10 @@ func (app *App) api(writer http.ResponseWriter, request *http.Request, path, pri
 		defer rows.Close()
 		result := []Object{}
 		for rows.Next() {
-			var id int64
-			var action, actor, created string
-			if rows.Scan(&id, &action, &actor, &created) == nil {
-				result = append(result, Object{"id": id, "action": action, "actor": actor, "created": created})
+			var id, remote int64
+			var action, actor, created, ip string
+			if rows.Scan(&id, &action, &actor, &created, &ip, &remote) == nil {
+				result = append(result, Object{"id": id, "action": action, "actor": actor, "created": created, "ip": ip, "remote": remote == 1})
 			}
 		}
 		ok(writer, result)
@@ -175,6 +175,15 @@ func (app *App) validate(kind string, item Object, update bool) error {
 				return errors.New("应用权限无效")
 			}
 		}
+		if value := strings.TrimSpace(text(item["expiresAt"])); value != "" {
+			if len(value) < 10 {
+				return errors.New("应用有效期格式应为 YYYY-MM-DD")
+			}
+			if _, err := time.Parse("2006-01-02", value[:10]); err != nil {
+				return errors.New("应用有效期格式应为 YYYY-MM-DD")
+			}
+			item["expiresAt"] = value[:10]
+		}
 	}
 	return nil
 }
@@ -275,6 +284,10 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 			if end > total {
 				end = total
 			}
+			if strings.HasPrefix(request.URL.Path, "/open/") {
+				ok(writer, filtered[start:end])
+				return
+			}
 			ok(writer, Object{"data": filtered[start:end], "total": total})
 			return
 		}
@@ -355,12 +368,17 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 					secret = randomToken()
 					item["client_id"] = randomToken()[:24]
 					item["secret_hash"] = hash(secret)
+					item["client_secret"] = secret
 				} else {
 					old, _ := app.store.get(kind, integer(item["id"]))
 					item["client_id"] = old["client_id"]
 					item["secret_hash"] = old["secret_hash"]
+					if value, exists := old["client_secret"]; exists {
+						item["client_secret"] = value
+					} else {
+						delete(item, "client_secret")
+					}
 				}
-				delete(item, "client_secret")
 			}
 			if kind == "dependencies" {
 				item["status"] = 1
@@ -498,6 +516,7 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 				}
 				if kind == "apps" {
 					_, _ = app.store.db.Exec("DELETE FROM sessions WHERE principal=?", "app:"+text(id))
+					_, _ = app.store.db.Exec("DELETE FROM authorizations WHERE app_id=?", id)
 				}
 			}
 			if err != nil {
@@ -545,6 +564,58 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 					ok(writer, runs)
 					return
 				}
+			case "tokens":
+				if kind == "apps" && method == "GET" {
+					rows, err := app.store.db.Query("SELECT id,token,name,created,expires,permanent FROM authorizations WHERE app_id=? ORDER BY id DESC", id)
+					if err != nil {
+						apiError(writer, err)
+						return
+					}
+					defer rows.Close()
+					result := []Object{}
+					nowUnix := time.Now().Unix()
+					for rows.Next() {
+						var tokenID, expires, permanent int64
+						var token, name, created string
+						if rows.Scan(&tokenID, &token, &name, &created, &expires, &permanent) == nil {
+							result = append(result, Object{"id": tokenID, "appId": id, "token": token, "name": name, "created": created, "expires": expires, "permanent": permanent == 1, "active": permanent == 1 || expires > nowUnix})
+						}
+					}
+					ok(writer, result)
+					return
+				}
+				fail(writer, 405, "方法不支持")
+				return
+			case "token":
+				if kind == "apps" && method == "POST" {
+					if appExpired(item) {
+						fail(writer, 403, "应用已过期")
+						return
+					}
+					var body Object
+					if err := decode(request, &body); err != nil {
+						apiError(writer, err)
+						return
+					}
+					ttl := sessionTTL(integer(body["expiresIn"]), 24*time.Hour)
+					permanent := boolean(body["permanent"])
+					if permanent {
+						ttl = 0
+					}
+					token, record, err := app.createAppToken(id, text(item["name"]), ttl, permanent)
+					if err != nil {
+						apiError(writer, err)
+						return
+					}
+					ok(writer, Object{
+						"token": token, "token_type": "Bearer",
+						"expiration": record["expires"], "expiresIn": record["expiresIn"], "permanent": record["permanent"], "id": record["id"],
+						"name": text(item["name"]), "client_id": text(item["client_id"]),
+					})
+					return
+				}
+				fail(writer, 405, "方法不支持")
+				return
 			case "move":
 				if method == "PUT" {
 					var body Object
@@ -590,18 +661,38 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 				if kind == "apps" && method == "PUT" {
 					secret := randomToken()
 					item["secret_hash"] = hash(secret)
+					item["client_secret"] = secret
 					saved, err := app.store.save(kind, item)
 					if err != nil {
 						apiError(writer, err)
 						return
 					}
 					_, _ = app.store.db.Exec("DELETE FROM sessions WHERE principal=?", "app:"+text(id))
+					_, _ = app.store.db.Exec("DELETE FROM authorizations WHERE app_id=?", id)
 					delete(saved, "secret_hash")
 					saved["client_secret"] = secret
 					ok(writer, saved)
 					return
 				}
 			}
+		}
+		if len(segments) == 3 && kind == "apps" && segments[1] == "tokens" && method == "DELETE" {
+			tokenID := integer(segments[2])
+			var token string
+			if err := app.store.db.QueryRow("SELECT token FROM authorizations WHERE id=? AND app_id=?", tokenID, id).Scan(&token); err != nil {
+				apiError(writer, err)
+				return
+			}
+			if _, err := app.store.db.Exec("DELETE FROM sessions WHERE token=?", hash(token)); err != nil {
+				apiError(writer, err)
+				return
+			}
+			if _, err := app.store.db.Exec("DELETE FROM authorizations WHERE id=?", tokenID); err != nil {
+				apiError(writer, err)
+				return
+			}
+			ok(writer, nil)
+			return
 		}
 		if len(segments) == 4 && segments[1] == "instances" && segments[3] == "stop" && method == "POST" {
 			app.engine.stop(kind, id, integer(segments[2]))

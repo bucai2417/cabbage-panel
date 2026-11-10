@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -280,5 +281,113 @@ func TestResourceDefaultOrderingAndPinning(test *testing.T) {
 	list = panel.data(test, "GET", "/api/crons", nil).(map[string]any)["data"].([]any)
 	if integer(list[0].(map[string]any)["id"]) != firstTask {
 		test.Fatalf("disabled pinned task floated above enabled task: %v", list)
+	}
+}
+
+func TestAuditIPRemoteAndAppAuthorization(test *testing.T) {
+	panel := setupPanel(test)
+	app := panel.data(test, "POST", "/api/apps", Object{"name": "授权测试", "scopes": []string{"crons"}}).(map[string]any)
+	if text(app["client_secret"]) == "" {
+		test.Fatal("app secret is not readable after creation")
+	}
+	listed := panel.data(test, "GET", "/api/apps", nil).([]any)
+	for _, entry := range listed {
+		item := entry.(map[string]any)
+		if integer(item["id"]) == integer(app["id"]) && text(item["client_secret"]) != text(app["client_secret"]) {
+			test.Fatal("app secret is not stored for later viewing")
+		}
+	}
+	created := panel.data(test, "POST", fmt.Sprintf("/api/apps/%d/token", integer(app["id"])), Object{"expiresIn": 3600}).(map[string]any)
+	token := text(created["token"])
+	if token == "" || integer(created["expiresIn"]) != 3600 {
+		test.Fatalf("app authorization: %v", created)
+	}
+	status, _ := panel.call(test, "GET", "/open/crons", nil, token)
+	if status != 200 {
+		test.Fatalf("app authorization could not access crons: %d", status)
+	}
+	query := "?client_id=" + url.QueryEscape(text(app["client_id"])) + "&client_secret=" + url.QueryEscape(text(app["client_secret"])) + "&expiresIn=1800"
+	status, response := panel.call(test, "GET", "/open/auth/token"+query, nil, "")
+	if status != 200 || integer(response["data"].(map[string]any)["expiresIn"]) != 1800 {
+		test.Fatalf("custom token ttl: %d %v", status, response)
+	}
+	permanent := panel.data(test, "POST", fmt.Sprintf("/api/apps/%d/token", integer(app["id"])), Object{"permanent": true}).(map[string]any)
+	if !boolean(permanent["permanent"]) || integer(permanent["expiration"]) != 0 || integer(permanent["expiresIn"]) != 0 {
+		test.Fatalf("permanent authorization: %v", permanent)
+	}
+	permanentToken := text(permanent["token"])
+	status, _ = panel.call(test, "GET", "/open/crons", nil, permanentToken)
+	if status != 200 {
+		test.Fatalf("permanent authorization could not access crons: %d", status)
+	}
+	var storedExpiry int64
+	if err := panel.app.store.db.QueryRow("SELECT expires FROM sessions WHERE token=?", hash(permanentToken)).Scan(&storedExpiry); err != nil || storedExpiry != 0 {
+		test.Fatalf("permanent session expiry: %d %v", storedExpiry, err)
+	}
+	tokens := panel.data(test, "GET", fmt.Sprintf("/api/apps/%d/tokens", integer(app["id"])), nil).([]any)
+	if len(tokens) < 2 {
+		test.Fatalf("authorization registry: %v", tokens)
+	}
+	var revokeID int64
+	for _, entry := range tokens {
+		item := entry.(map[string]any)
+		if text(item["token"]) == token {
+			revokeID = integer(item["id"])
+		}
+	}
+	if revokeID == 0 {
+		test.Fatal("stored authorization token not listed")
+	}
+	panel.data(test, "DELETE", fmt.Sprintf("/api/apps/%d/tokens/%d", integer(app["id"]), revokeID), nil)
+	status, _ = panel.call(test, "GET", "/open/crons", nil, token)
+	if status != 401 {
+		test.Fatalf("revoked authorization remained valid: %d", status)
+	}
+	permanentQuery := "?client_id=" + url.QueryEscape(text(app["client_id"])) + "&client_secret=" + url.QueryEscape(text(app["client_secret"])) + "&permanent=1"
+	status, response = panel.call(test, "GET", "/open/auth/token"+permanentQuery, nil, "")
+	if status != 200 || !boolean(response["data"].(map[string]any)["permanent"]) {
+		test.Fatalf("credential permanent token: %d %v", status, response)
+	}
+	expiredApp := panel.data(test, "POST", "/api/apps", Object{"name": "过期应用", "scopes": []string{"crons"}, "expiresAt": "2020-01-01"}).(map[string]any)
+	status, _ = panel.call(test, "POST", fmt.Sprintf("/api/apps/%d/token", integer(expiredApp["id"])), Object{"expiresIn": 3600}, panel.token)
+	if status != 403 {
+		test.Fatalf("expired app issued authorization: %d", status)
+	}
+	expiredQuery := "?client_id=" + url.QueryEscape(text(expiredApp["client_id"])) + "&client_secret=" + url.QueryEscape(text(expiredApp["client_secret"]))
+	status, _ = panel.call(test, "GET", "/open/auth/token"+expiredQuery, nil, "")
+	if status != 403 {
+		test.Fatalf("expired app exchanged credentials: %d", status)
+	}
+	panel.data(test, "PUT", "/api/apps", Object{"id": integer(app["id"]), "expiresAt": "2020-01-01"})
+	status, _ = panel.call(test, "GET", "/open/crons", nil, token)
+	if status != 401 {
+		test.Fatalf("token of expired app remained valid: %d", status)
+	}
+	status, _ = panel.call(test, "GET", "/open/crons", nil, permanentToken)
+	if status != 401 {
+		test.Fatalf("permanent token outlived expired app: %d", status)
+	}
+	encoded, _ := json.Marshal(Object{"username": "admin", "password": "test-password-123"})
+	request := httptest.NewRequest("POST", "/api/user/login", bytes.NewReader(encoded))
+	request.RemoteAddr = "203.0.113.9:4444"
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	panel.handler.ServeHTTP(recorder, request)
+	if recorder.Code != 200 {
+		test.Fatalf("remote login status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	audits := panel.data(test, "GET", "/api/audit", nil).([]any)
+	found := false
+	for _, entry := range audits {
+		item := entry.(map[string]any)
+		if text(item["action"]) == "login" && text(item["ip"]) == "203.0.113.9" {
+			found = true
+			if !boolean(item["remote"]) {
+				test.Fatalf("remote login not marked: %v", item)
+			}
+		}
+	}
+	if !found {
+		test.Fatal("remote login IP not recorded")
 	}
 }

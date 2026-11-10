@@ -78,7 +78,8 @@ func New(root, version, commit, updateKey string) (*App, error) {
 		log.Printf("首次设置密钥: %s (保存在 %s)", app.setupKey, keyPath)
 	}
 	_, _ = store.db.Exec("UPDATE runs SET status='interrupted',finished=? WHERE status IN ('running','queued')", now())
-	_, _ = store.db.Exec("DELETE FROM sessions WHERE expires<?", time.Now().Unix())
+	_, _ = store.db.Exec("DELETE FROM sessions WHERE expires>0 AND expires<?", time.Now().Unix())
+	_, _ = store.db.Exec("DELETE FROM authorizations WHERE permanent=0 AND expires>0 AND expires<?", time.Now().Unix())
 	if err := app.initializeConfigs(); err != nil {
 		store.close()
 		return nil, err
@@ -153,6 +154,54 @@ func decode(request *http.Request, value any) error {
 func hash(value string) string {
 	result := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(result[:])
+}
+
+func clientIP(request *http.Request) string {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err != nil {
+		host = request.RemoteAddr
+	}
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if host == "" {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
+		if forwarded := request.Header.Get("X-Forwarded-For"); forwarded != "" {
+			first := strings.TrimSpace(strings.Split(forwarded, ",")[0])
+			if net.ParseIP(first) != nil {
+				return first
+			}
+		}
+		if realIP := strings.TrimSpace(request.Header.Get("X-Real-IP")); net.ParseIP(realIP) != nil {
+			return realIP
+		}
+	}
+	return host
+}
+
+func sessionTTL(seconds int64, fallback time.Duration) time.Duration {
+	if seconds < 60 {
+		return fallback
+	}
+	if seconds > 30*24*60*60 {
+		seconds = 30 * 24 * 60 * 60
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func appExpired(item Object) bool {
+	value := strings.TrimSpace(text(item["expiresAt"]))
+	if value == "" {
+		return false
+	}
+	if len(value) > 10 {
+		value = value[:10]
+	}
+	deadline, err := time.ParseInLocation("2006-01-02", value, time.Local)
+	if err != nil {
+		return false
+	}
+	return !time.Now().Before(deadline.Add(24 * time.Hour))
 }
 
 func (app *App) SetWebDir(directory string) error {
@@ -251,7 +300,7 @@ func (app *App) Handler() http.Handler {
 			if request.Method != "GET" {
 				app.writeMu.Lock()
 				defer app.writeMu.Unlock()
-				app.store.audit(request.Method+" "+apiPath, principal)
+				app.store.audit(request.Method+" "+apiPath, principal, clientIP(request), false)
 			}
 			app.api(writer, request, apiPath, principal)
 			return
@@ -353,13 +402,21 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 			fail(writer, 401, "用户名或密码错误")
 			return true
 		}
+		ip := clientIP(request)
+		remote := false
+		if ip != "" {
+			var previous string
+			if err := app.store.db.QueryRow("SELECT ip FROM audit WHERE action='login' AND actor='admin' AND ip<>'' ORDER BY id DESC LIMIT 1").Scan(&previous); err == nil && previous != "" && previous != ip {
+				remote = true
+			}
+		}
 		token, err := app.newSession("admin", 24*time.Hour)
 		if err != nil {
 			fail(writer, 500, err.Error())
 			return true
 		}
 		http.SetCookie(writer, &http.Cookie{Name: "cabbage_session", Value: token, HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteStrictMode, Path: "/", MaxAge: 86400})
-		app.store.audit("login", "admin")
+		app.store.audit("login", "admin", ip, remote)
 		ok(writer, Object{"token": token, "token_type": "Bearer", "expiration": time.Now().Add(24 * time.Hour).Unix(), "username": text(body["username"])})
 		return true
 	}
@@ -375,12 +432,21 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 		}
 		for _, item := range apps {
 			if text(item["client_id"]) == request.URL.Query().Get("client_id") && subtle.ConstantTimeCompare([]byte(text(item["secret_hash"])), []byte(hash(request.URL.Query().Get("client_secret")))) == 1 {
-				token, err := app.newSession("app:"+text(item["id"]), 2*time.Hour)
+				if appExpired(item) {
+					fail(writer, 403, "应用已过期")
+					return true
+				}
+				ttl := sessionTTL(integer(request.URL.Query().Get("expiresIn")), 2*time.Hour)
+				permanent := request.URL.Query().Get("permanent") == "1" || strings.EqualFold(request.URL.Query().Get("permanent"), "true")
+				if permanent {
+					ttl = 0
+				}
+				token, record, err := app.createAppToken(integer(item["id"]), text(item["name"]), ttl, permanent)
 				if err != nil {
 					fail(writer, 500, err.Error())
 					return true
 				}
-				ok(writer, Object{"token": token, "token_type": "Bearer", "expiration": time.Now().Add(2 * time.Hour).Unix()})
+				ok(writer, Object{"token": token, "token_type": "Bearer", "expiration": record["expires"], "expiresIn": record["expiresIn"], "permanent": record["permanent"]})
 				return true
 			}
 		}
@@ -418,8 +484,35 @@ func (app *App) changeUser(body Object) error {
 
 func (app *App) newSession(principal string, duration time.Duration) (string, error) {
 	token := randomToken()
-	_, err := app.store.db.Exec("INSERT INTO sessions(token,principal,expires) VALUES(?,?,?)", hash(token), principal, time.Now().Add(duration).Unix())
+	expires := int64(0)
+	if duration > 0 {
+		expires = time.Now().Add(duration).Unix()
+	}
+	_, err := app.store.db.Exec("INSERT INTO sessions(token,principal,expires) VALUES(?,?,?)", hash(token), principal, expires)
 	return token, err
+}
+
+func (app *App) createAppToken(appID int64, appName string, ttl time.Duration, permanent bool) (string, Object, error) {
+	token, err := app.newSession("app:"+text(appID), ttl)
+	if err != nil {
+		return "", nil, err
+	}
+	expires := int64(0)
+	if ttl > 0 {
+		expires = time.Now().Add(ttl).Unix()
+	}
+	flag := 0
+	if permanent {
+		flag = 1
+	}
+	created := now()
+	result, err := app.store.db.Exec("INSERT INTO authorizations(app_id,token,name,created,expires,permanent) VALUES(?,?,?,?,?,?)", appID, token, appName, created, expires, flag)
+	if err != nil {
+		_, _ = app.store.db.Exec("DELETE FROM sessions WHERE token=?", hash(token))
+		return "", nil, err
+	}
+	id, _ := result.LastInsertId()
+	return token, Object{"id": id, "appId": appID, "name": appName, "token": token, "created": created, "expires": expires, "permanent": permanent, "expiresIn": int64(ttl / time.Second)}, nil
 }
 func (app *App) authenticate(request *http.Request) (string, error) {
 	token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
@@ -429,9 +522,12 @@ func (app *App) authenticate(request *http.Request) (string, error) {
 		}
 	}
 	var principal string
-	err := app.store.db.QueryRow("SELECT principal FROM sessions WHERE token=? AND expires>?", hash(token), time.Now().Unix()).Scan(&principal)
+	err := app.store.db.QueryRow("SELECT principal FROM sessions WHERE token=? AND (expires=0 OR expires>?)", hash(token), time.Now().Unix()).Scan(&principal)
 	if err == nil && strings.HasPrefix(principal, "app:") {
-		_, err = app.store.get("apps", integer(strings.TrimPrefix(principal, "app:")))
+		item, getErr := app.store.get("apps", integer(strings.TrimPrefix(principal, "app:")))
+		if getErr != nil || appExpired(item) {
+			err = errors.New("应用已过期或不存在")
+		}
 	}
 	return principal, err
 }
@@ -443,7 +539,7 @@ func (app *App) allowed(principal, resource string) bool {
 		return false
 	}
 	item, err := app.store.get("apps", integer(strings.TrimPrefix(principal, "app:")))
-	if err != nil {
+	if err != nil || appExpired(item) {
 		return false
 	}
 	values, _ := item["scopes"].([]any)

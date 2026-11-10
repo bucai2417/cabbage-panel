@@ -418,6 +418,7 @@ func (app *App) cleanup() (int, error) {
 			return 0, err
 		}
 	}
-	_, _ = app.store.db.Exec("DELETE FROM sessions WHERE expires<?", time.Now().Unix())
+	_, _ = app.store.db.Exec("DELETE FROM sessions WHERE expires>0 AND expires<?", time.Now().Unix())
+	_, _ = app.store.db.Exec("DELETE FROM authorizations WHERE permanent=0 AND expires>0 AND expires<?", time.Now().Unix())
 	return len(items), nil
 }

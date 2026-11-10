@@ -8,8 +8,8 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 
 | 资源 | 方法 / 路径（省略前缀） | 形状 |
 | --- | --- | --- |
-| token | GET /open/auth/token | client_id、client_secret 查询参数；token、token_type、expiration（Unix 秒） |
-| 任务列表 | GET /crons | searchValue/page/size；data={data:[],total:N} |
+| token | GET /open/auth/token | client_id、client_secret 查询参数；可选 expiresIn（60–2592000 秒，默认 7200）或 permanent=1；token、token_type、expiration（Unix 秒，0 表示永久）、expiresIn、permanent |
+| 任务列表 | GET /crons | searchValue/page/size；/open/crons 的 data 为 CronItem[]，管理接口 /api/crons 返回 {data:[],total:N} |
 | 任务详情 | GET /crons/:id | 数字 ID |
 | 创建任务 | POST /crons | {name,command,schedule,labels?,remarks?,timeout?,allowConcurrent?} |
 | 更新任务 | PUT /crons | 上述字段和 id；支持部分更新 |
@@ -49,8 +49,11 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | 订阅管理 | GET / POST / PUT / DELETE /subscriptions | POST/PUT 对象；type=git-repo/file、url、alias、name、schedule、branch、whitelist、blacklist、autoAddCron、autoDelCron |
 | 订阅操作 | PUT /subscriptions/run,stop,enable,disable | ID 数组 |
 | 订阅日志 | GET /subscriptions/:id/log、/:id/logs | 最新文本 / 运行数组 |
-| 应用管理 | GET / POST / PUT / DELETE /api/apps | name/scopes；创建返回 client_id/client_secret |
-| 重置密钥 | PUT /api/apps/:id/reset-secret | 撤销 token，返回新 secret |
+| 应用管理 | GET / POST / PUT / DELETE /api/apps | name/scopes/expiresAt；创建返回 client_id/client_secret；管理员查询列表或详情可直接读取 client_secret |
+| 重置密钥 | PUT /api/apps/:id/reset-secret | 撤销 token，返回新 secret，并保存新的可查看密钥 |
+| 创建 Authorization | POST /api/apps/:id/token | {expiresIn} 秒或 {permanent:true}；到期返回 403；返回 token、expiration（0 表示永久）、expiresIn、permanent、client_id；Authorization 与 Client ID 用途不同 |
+| Authorization 列表 | GET /api/apps/:id/tokens | 管理员读取该应用的令牌登记，含 token、created、expires、permanent、active；刷新页面后可恢复显示 |
+| 撤销 Authorization | DELETE /api/apps/:id/tokens/:tokenId | 同时删除令牌登记与 session，立即失效 |
 
 任务 status=0 表示有在途实例，1 表示空闲；isDisabled/isPinned=0/1。变量 status=0 启用，1 停用。依赖 status=0 安装成功，1 等待或安装中，2 未就绪。lastStatus 和运行记录另用字符串状态，不能与青龙所有内部枚举直接等值比较。
 
@@ -80,7 +83,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | GET /api/system/update | GitHub 最新稳定 Release |
 | POST /api/system/update/download | 后台下载验证，返回 runId |
 | POST /api/system/update/apply | 替换程序，返回 restartRequired=true |
-| GET /api/audit | 最近 200 条操作 |
+| GET /api/audit | 最近 200 条操作；含 ip、remote（异地登录表示与上一次管理员登录 IP 不同） |
 | POST /mcp | JSON-RPC initialize/ping/tools/list/tools/call |
 
 ## v1.1 扩展接口
@@ -102,7 +105,9 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 
 configs/detail 与 configs PUT 支持虚拟 system.json、notifications.json，保存会验证并立即更新 SQLite。history/restore 也会应用配置，恢复前保存当前内容。GET /api/system/settings 与系统配置文件共用数据。
 
-GET /crons 默认把启用任务排在禁用任务前，组内置顶优先，其余按创建时间新到旧；POST /envs 不指定 position 时自动追加到环境变量末尾，GET /envs 按置顶、position 和创建时间升序返回。
+GET /crons 默认把启用任务排在禁用任务前，组内置顶优先，其余按创建时间新到旧；POST /envs 不指定 position 时自动追加到环境变量末尾，GET /envs 按置顶、position 和创建时间升序返回。应用 expiresAt 为空表示永久有效；到期后不能再换取 Authorization，已有应用 token 也会失效。
+
+应用 Client Secret 以明文保存在本地 SQLite 以支持管理员随时查看；备份文件同样包含该字段，请保护 data/ 与备份。永久 Authorization 的 sessions.expires 为 0，不参与过期清理；应用自身到期后该令牌仍会失效。
 
 脚本助手内部使用 POST /api/notifications/send，JSON 为 {title,content}。此端点只接受面板注入的临时通知专用 Bearer 凭证；不能使用该凭证访问其他 API，也不能使用管理员会话绕过此端点的专用鉴权。
 

@@ -53,6 +53,8 @@ func openStore(root string) (*Store, error) {
 		"CREATE INDEX IF NOT EXISTS records_kind ON records(kind);" +
 		"CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);" +
 		"CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, principal TEXT NOT NULL, expires INTEGER NOT NULL);" +
+		"CREATE TABLE IF NOT EXISTS authorizations (id INTEGER PRIMARY KEY AUTOINCREMENT, app_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created TEXT NOT NULL, expires INTEGER NOT NULL, permanent INTEGER NOT NULL DEFAULT 0);" +
+		"CREATE INDEX IF NOT EXISTS authorizations_app ON authorizations(app_id, id DESC);" +
 		"CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, command TEXT NOT NULL, status TEXT NOT NULL, started TEXT, finished TEXT, exit_code INTEGER, duration REAL NOT NULL DEFAULT 0, log_path TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);" +
 		"CREATE INDEX IF NOT EXISTS runs_task ON runs(kind, task_id, id DESC);" +
 		"CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, actor TEXT NOT NULL, created TEXT NOT NULL);" +
@@ -61,8 +63,45 @@ func openStore(root string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := ensureAuditColumns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	success = true
 	return &Store{db: db, lock: lock}, nil
+}
+
+func ensureAuditColumns(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(audit)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, column := range []struct{ name, definition string }{
+		{"ip", "ip TEXT NOT NULL DEFAULT ''"},
+		{"remote", "remote INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if columns[column.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE audit ADD COLUMN " + column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (store *Store) close() {
@@ -200,8 +239,12 @@ func (store *Store) setSetting(key, value string) error {
 	_, err := store.db.Exec("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value)
 	return err
 }
-func (store *Store) audit(action, actor string) {
-	_, _ = store.db.Exec("INSERT INTO audit(action,actor,created) VALUES(?,?,?)", action, actor, now())
+func (store *Store) audit(action, actor, ip string, remote bool) {
+	flag := 0
+	if remote {
+		flag = 1
+	}
+	_, _ = store.db.Exec("INSERT INTO audit(action,actor,created,ip,remote) VALUES(?,?,?,?,?)", action, actor, now(), ip, flag)
 }
 
 func safePath(root, relative string) (string, error) {
