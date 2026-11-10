@@ -149,6 +149,10 @@ func TestAuthScopesAndMCP(test *testing.T) {
 	if status != 200 || len(response["data"].([]any)) != 1 {
 		test.Fatal(response)
 	}
+	status, response = panel.call(test, "GET", "/api/crons", nil, panel.token)
+	if status != 200 || len(response["data"].([]any)) != 1 {
+		test.Fatal(response)
+	}
 	panel.data(test, "DELETE", "/api/apps", []int64{integer(created["id"])})
 	status, _ = panel.call(test, "GET", "/open/crons", nil, token)
 	if status != 401 {

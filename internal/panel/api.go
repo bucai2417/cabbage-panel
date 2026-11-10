@@ -284,11 +284,7 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 			if end > total {
 				end = total
 			}
-			if strings.HasPrefix(request.URL.Path, "/open/") {
-				ok(writer, filtered[start:end])
-				return
-			}
-			ok(writer, Object{"data": filtered[start:end], "total": total})
+			ok(writer, filtered[start:end])
 			return
 		}
 		ok(writer, filtered)

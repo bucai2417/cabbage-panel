@@ -20,7 +20,7 @@ const fields = [
 ]
 function createdTime(item) { return new Date(item.createdAt || item.updatedAt || 0).getTime() || item.id }
 function taskOrder(left, right) { return Number(!!left.isDisabled) - Number(!!right.isDisabled) || Number(!!right.isPinned) - Number(!!left.isPinned) || createdTime(right) - createdTime(left) || right.id - left.id }
-async function load() { try { const result = await api('/crons'); tasks.value = [...result.data].sort(taskOrder); selected.value = selected.value.filter(id => tasks.value.some(item => item.id === id)); if (activeTaskId.value && !tasks.value.some(item => item.id === activeTaskId.value)) activeTaskId.value = 0 } finally { loading.value = false } }
+async function load() { try { const result = await api('/crons'); const list = Array.isArray(result) ? result : (result?.data || []); tasks.value = [...list].sort(taskOrder); selected.value = selected.value.filter(id => tasks.value.some(item => item.id === id)); if (activeTaskId.value && !tasks.value.some(item => item.id === activeTaskId.value)) activeTaskId.value = 0 } finally { loading.value = false } }
 usePolling(load, 3000)
 watch(() => props.globalSearch, value => { search.value = value; page.value = 1 })
 watch([search, filter, size], () => { page.value = 1 })

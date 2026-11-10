@@ -39,7 +39,7 @@
 14. 脚本直接运行不创建定时任务；调试接口使用未保存内容运行，任务结束后清理临时文件，非脚本扩展名被拒绝。
 15. 任务/环境变量默认排序、置顶与禁用分组；环境变量新建自动追加到末尾。
 16. 应用 Authorization 使用可配置有效期并可访问开放接口；应用发起与到期后拒绝授权、Client Secret 可由管理员再次读取；永久 Authorization 的 session expires 为 0 并可访问接口；令牌登记可列出并撤销；审计记录 IP，跨 IP 管理员登录标记 remote。
-17. `/open/crons` 返回青龙兼容的 `data: CronItem[]`；管理接口 `/api/crons` 保持分页对象。
+17. `/api/crons` 与 `/open/crons` 均返回青龙兼容的 `data: CronItem[]`；page/size 只截取数组。
 
 ## 本次 UI 优化（2026-11-10）
 

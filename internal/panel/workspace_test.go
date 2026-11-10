@@ -268,17 +268,17 @@ func TestResourceDefaultOrderingAndPinning(test *testing.T) {
 	}
 	firstTask := panel.task(test, "旧任务", "echo first", nil)
 	secondTask := panel.task(test, "新任务", "echo second", nil)
-	list := panel.data(test, "GET", "/api/crons", nil).(map[string]any)["data"].([]any)
+	list := panel.data(test, "GET", "/api/crons", nil).([]any)
 	if integer(list[0].(map[string]any)["id"]) != secondTask || integer(list[1].(map[string]any)["id"]) != firstTask {
 		test.Fatalf("task creation order: %v", list)
 	}
 	panel.data(test, "PUT", "/api/crons/disable", []int64{secondTask})
-	list = panel.data(test, "GET", "/api/crons", nil).(map[string]any)["data"].([]any)
+	list = panel.data(test, "GET", "/api/crons", nil).([]any)
 	if integer(list[0].(map[string]any)["id"]) != firstTask || integer(list[1].(map[string]any)["id"]) != secondTask {
 		test.Fatalf("disabled task order: %v", list)
 	}
 	panel.data(test, "PUT", "/api/crons/pin", []int64{secondTask})
-	list = panel.data(test, "GET", "/api/crons", nil).(map[string]any)["data"].([]any)
+	list = panel.data(test, "GET", "/api/crons", nil).([]any)
 	if integer(list[0].(map[string]any)["id"]) != firstTask {
 		test.Fatalf("disabled pinned task floated above enabled task: %v", list)
 	}

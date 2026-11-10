@@ -9,7 +9,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | 资源 | 方法 / 路径（省略前缀） | 形状 |
 | --- | --- | --- |
 | token | GET /open/auth/token | client_id、client_secret 查询参数；可选 expiresIn（60–2592000 秒，默认 7200）或 permanent=1；token、token_type、expiration（Unix 秒，0 表示永久）、expiresIn、permanent |
-| 任务列表 | GET /crons | searchValue/page/size；/open/crons 的 data 为 CronItem[]，管理接口 /api/crons 返回 {data:[],total:N} |
+| 任务列表 | GET /crons | searchValue/page/size；/api 与 /open 均返回 data 为 CronItem[]，不再嵌套分页对象 |
 | 任务详情 | GET /crons/:id | 数字 ID |
 | 创建任务 | POST /crons | {name,command,schedule,labels?,remarks?,timeout?,allowConcurrent?} |
 | 更新任务 | PUT /crons | 上述字段和 id；支持部分更新 |
