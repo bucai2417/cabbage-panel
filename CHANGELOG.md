@@ -2,6 +2,9 @@
 
 ## 未发布
 
+- 审计改为青龙兼容的登录日志：新增 `GET /api/user/login-log`，返回 timestamp/address/ip/platform/status，成功与失败登录都会记录，最多保留 100 条；移除 `GET /api/audit` 和日常写操作审计，旧登录记录自动迁移一次。设置页「操作审计」改为「登录日志」。
+- `GET /api/user` 响应补齐青龙字段 `avatar` 与 `twoFactorActivated`。
+- 任务与环境变量接口补齐青龙字段：`_id` 为字符串、`timestamp` 为 `Sun Oct 04 02:58:24 GMT+08:00 2026` 形式，任务新增 `saved`、`isSystem`、`pid`、`log_path`、`log_name`、`last_running_time`、`last_execution_time`、`sub_id`、`extra_schedules`、`task_before`、`task_after`、`allow_multiple_instances`、`work_dir`、`timeoutMs`、`notifyOnFinish`、`nextRunTime`，并接受同名字段创建/更新；环境变量不再输出 `isDisabled`。
 - 新增全局确认弹窗，删除任务、脚本、变量、订阅、依赖、日志、开放应用和备份时展示影响范围；取消不会产生改动。
 - 未保存修改拦截改为面板内弹窗，页面、文件、配置页签切换和全屏编辑器关闭使用同一交互。
 - 精简侧边栏：移除配置文件入口，脚本管理页内切换配置文件；底部状态区压缩为紧凑卡片；移除各页面大标题。
@@ -22,7 +25,7 @@
 - 设置页左侧导航滚动时固定；创建应用弹窗补充权限说明，开放应用可单独创建 1 小时–30 天有效期的 Authorization，与 Client ID 用途分离。
 - 开放应用改为卡片列表，支持应用有效期、到期禁用、直接查看/复制 Client Secret；MCP 区域移除 Client ID/Secret 输入，改为选择应用并生成 Authorization；Authorization 支持永久有效，并登记到数据库，刷新后可在 MCP 区域恢复、复制和撤销。
 - `/open/crons` 与 `/api/crons` 响应统一为青龙兼容的 `data: CronItem[]`，page/size 只截取数组，不再嵌套分页对象。
-- 操作审计增加 IP 列，与上次管理员登录 IP 不同的登录标记为异地并使用红色警示。
+- 登录日志记录访问 IP 和登录设备，可在设置页「登录日志」查看成功与失败记录。
 - 统一危险/警告按钮、下拉框和滚动条样式，增加页面切换与仪表盘卡片微动效，补充手机端弹窗布局。
 
 ## 1.1.0 · 2026-11-10

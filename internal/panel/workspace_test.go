@@ -24,7 +24,16 @@ func TestFolderOperationsAndTaskSource(test *testing.T) {
 		test.Fatal("creation overwrote an existing file")
 	}
 	tree := panel.data(test, "GET", "/api/scripts/tree", nil).([]any)
-	if len(tree) != 3 {
+	// 内置 notify.py / sendNotify.js 会随版本投放到 scripts 目录，这里只统计业务文件。
+	business := []any{}
+	for _, entry := range tree {
+		name := text(entry.(map[string]any)["path"])
+		if name == "notify.py" || name == "sendNotify.js" {
+			continue
+		}
+		business = append(business, entry)
+	}
+	if len(business) != 3 {
 		test.Fatalf("tree: %v", tree)
 	}
 	id := panel.task(test, "目录移动验证", "python "+shellQuote("中文目录/脚本 空格.py")+" --name 中文", nil)
@@ -376,18 +385,21 @@ func TestAuditIPRemoteAndAppAuthorization(test *testing.T) {
 	if recorder.Code != 200 {
 		test.Fatalf("remote login status %d: %s", recorder.Code, recorder.Body.String())
 	}
-	audits := panel.data(test, "GET", "/api/audit", nil).([]any)
+	logs := panel.data(test, "GET", "/api/user/login-log", nil).([]any)
 	found := false
-	for _, entry := range audits {
+	for _, entry := range logs {
 		item := entry.(map[string]any)
-		if text(item["action"]) == "login" && text(item["ip"]) == "203.0.113.9" {
+		if text(item["ip"]) == "203.0.113.9" {
 			found = true
-			if !boolean(item["remote"]) {
-				test.Fatalf("remote login not marked: %v", item)
+			if integer(item["status"]) != 0 {
+				test.Fatalf("successful login recorded as failed: %v", item)
+			}
+			if integer(item["timestamp"]) == 0 || item["platform"] == nil {
+				test.Fatalf("login log missing compatible fields: %v", item)
 			}
 		}
 	}
 	if !found {
-		test.Fatal("remote login IP not recorded")
+		test.Fatal("login IP not recorded")
 	}
 }

@@ -88,6 +88,35 @@ func (app *App) systemAPI(writer http.ResponseWriter, request *http.Request, tai
 		app.notificationsAPI(writer, request)
 		return
 	}
+	// 青龙 GET /api/system/notify-log：通知发送日志。
+	if tail == "notify-log" && request.Method == "GET" {
+		ok(writer, app.notifyLogs())
+		return
+	}
+	// 青龙 GET /api/system/log：系统运行日志文本；DELETE 清空。
+	if tail == "log" {
+		app.systemLogAPI(writer, request)
+		return
+	}
+	// 青龙 GET /api/system/config 读取系统配置；这里映射到面板设置，保持字段兼容。
+	if tail == "config" && request.Method == "GET" {
+		settings := app.settings()
+		ok(writer, Object{
+			"id": 1, "type": "systemConfig",
+			"info": Object{
+				"timezone":       time.Now().Location().String(),
+				"lang":           "zh",
+				"concurrency":    settings["concurrency"],
+				"timeout":        settings["timeout"],
+				"retentionDays":  settings["retentionDays"],
+				"githubRepo":     settings["githubRepo"],
+				"webhookURL":     settings["webhookURL"],
+				"notifyFailures": settings["notifyFailures"],
+			},
+			"signedUpdates": app.updateKey != "",
+		})
+		return
+	}
 	if tail == "settings" {
 		if request.Method == "GET" {
 			result := app.settings()
@@ -179,6 +208,9 @@ func (app *App) installDependency(ctx context.Context, item Object, writer io.Wr
 	}
 	name := text(item["name"])
 	remove := boolean(item["remove"])
+	npmMirror := strings.TrimSpace(app.store.setting("npmMirror", ""))
+	pythonMirror := strings.TrimSpace(app.store.setting("pythonMirror", ""))
+	linuxMirror := strings.TrimSpace(app.store.setting("linuxMirror", ""))
 	var err error
 	switch integer(item["type"]) {
 	case 0:
@@ -189,9 +221,19 @@ func (app *App) installDependency(ctx context.Context, item Object, writer io.Wr
 		program := "npm"
 		if runtime.GOOS == "windows" {
 			program = "npm.cmd"
-			err = app.process(ctx, app.root, writer, findShell(), "-c", "npm --prefix "+shellQuote(filepath.ToSlash(filepath.Join(app.root, "packages")))+" "+action+" --no-audit --no-fund --ignore-scripts -- "+shellQuote(name))
+			command := "npm --prefix " + shellQuote(filepath.ToSlash(filepath.Join(app.root, "packages"))) + " " + action + " --no-audit --no-fund --ignore-scripts"
+			if npmMirror != "" {
+				command += " --registry=" + shellQuote(npmMirror)
+			}
+			command += " -- " + shellQuote(name)
+			err = app.process(ctx, app.root, writer, findShell(), "-c", command)
 		} else {
-			err = app.process(ctx, app.root, writer, program, "--prefix", filepath.Join(app.root, "packages"), action, "--no-audit", "--no-fund", "--ignore-scripts", "--", name)
+			args := []string{"--prefix", filepath.Join(app.root, "packages"), action, "--no-audit", "--no-fund", "--ignore-scripts"}
+			if npmMirror != "" {
+				args = append(args, "--registry="+npmMirror)
+			}
+			args = append(args, "--", name)
+			err = app.process(ctx, app.root, writer, program, args...)
 		}
 	case 1:
 		venv := filepath.Join(app.root, "packages", "venv")
@@ -203,7 +245,12 @@ func (app *App) installDependency(ctx context.Context, item Object, writer io.Wr
 		if remove {
 			err = app.process(ctx, app.root, writer, app.python(), "-m", "pip", "uninstall", "-y", name)
 		} else {
-			err = app.process(ctx, app.root, writer, app.python(), "-m", "pip", "install", "--disable-pip-version-check", "--", name)
+			args := []string{"-m", "pip", "install", "--disable-pip-version-check"}
+			if pythonMirror != "" {
+				args = append(args, "-i", pythonMirror)
+			}
+			args = append(args, "--", name)
+			err = app.process(ctx, app.root, writer, app.python(), args...)
 		}
 	case 2:
 		if runtime.GOOS != "linux" {
@@ -214,13 +261,28 @@ func (app *App) installDependency(ctx context.Context, item Object, writer io.Wr
 			if remove {
 				action = "del"
 			}
-			err = app.process(ctx, app.root, writer, program, action, "--", name)
+			args := []string{action}
+			// apk 镜像：--repository 指向镜像的 community/main 仓库。
+			if linuxMirror != "" && action == "add" {
+				args = append(args, "--repository", linuxMirror)
+			}
+			args = append(args, "--", name)
+			err = app.process(ctx, app.root, writer, program, args...)
 		} else if program, lookupErr := exec.LookPath("apt-get"); lookupErr == nil {
 			action := "install"
 			if remove {
 				action = "remove"
 			}
-			err = app.process(ctx, app.root, writer, program, action, "-y", "--", name)
+			args := []string{action, "-y"}
+			// apt 镜像：通过 -o Dir::Etc::sourcelist 指向临时源文件，避免改动系统配置。
+			if linuxMirror != "" && action == "install" {
+				sourceList, writeErr := app.temporaryAptSource(linuxMirror)
+				if writeErr == nil {
+					args = append(args, "-o", "Dir::Etc::sourcelist="+sourceList, "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0")
+				}
+			}
+			args = append(args, "--", name)
+			err = app.process(ctx, app.root, writer, program, args...)
 		} else {
 			return errors.New("没有找到 apt-get 或 apk")
 		}
@@ -421,4 +483,53 @@ func (app *App) cleanup() (int, error) {
 	_, _ = app.store.db.Exec("DELETE FROM sessions WHERE expires>0 AND expires<?", time.Now().Unix())
 	_, _ = app.store.db.Exec("DELETE FROM authorizations WHERE permanent=0 AND expires>0 AND expires<?", time.Now().Unix())
 	return len(items), nil
+}
+
+// temporaryAptSource 为 apt-get 生成一份临时 sources.list，指向用户配置的镜像。
+// 镜像地址形如 https://mirrors.tuna.tsinghua.edu.cn/ubuntu/，自动补齐 main 组件。
+func (app *App) temporaryAptSource(mirror string) (string, error) {
+	mirror = strings.TrimSpace(mirror)
+	if mirror == "" {
+		return "", errors.New("镜像地址为空")
+	}
+	// 识别发行版代号，用于构造标准源行；无法识别时按 ubuntu 默认处理。
+	codename := detectDebianCodename()
+	base := strings.TrimRight(mirror, "/")
+	lines := []string{}
+	if strings.Contains(base, "debian") {
+		lines = append(lines,
+			"deb "+base+" "+codename+" main contrib non-free non-free-firmware",
+			"deb "+base+" "+codename+"-updates main contrib non-free non-free-firmware",
+		)
+	} else {
+		lines = append(lines,
+			"deb "+base+" "+codename+" main restricted universe multiverse",
+			"deb "+base+" "+codename+"-updates main restricted universe multiverse",
+		)
+	}
+	target := filepath.Join(app.root, "tmp", "sources.list")
+	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(target, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+// detectDebianCodename 读取 /etc/os-release 的 VERSION_CODENAME，失败时回退 bookworm。
+func detectDebianCodename() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "bookworm"
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "VERSION_CODENAME=") {
+			value := strings.Trim(strings.TrimPrefix(line, "VERSION_CODENAME="), "\"'")
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return "bookworm"
 }

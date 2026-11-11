@@ -110,6 +110,8 @@ func (app *App) Serve(ctx context.Context, addr string) error {
 	app.helperAddress = "http://" + net.JoinHostPort(host, port) + "/api/notifications/send"
 	app.helperMu.Unlock()
 	log.Printf("大白菜面板 v%s 已启动 http://localhost%s，MCP: /mcp，数据目录: %s", app.version, addr, app.root)
+	app.pruneSystemLog()
+	app.appendSystemLog("info", "[boot] 大白菜面板 v"+app.version+" 已启动 http://localhost"+addr)
 	finished := make(chan struct{})
 	go func() {
 		select {
@@ -177,6 +179,17 @@ func clientIP(request *http.Request) string {
 		}
 	}
 	return host
+}
+
+// loginPlatform 按青龙约定把登录设备归为 mobile 或 desktop。
+func loginPlatform(request *http.Request) string {
+	agent := strings.ToLower(request.Header.Get("User-Agent"))
+	for _, marker := range []string{"android", "iphone", "ipad", "ipod", "mobile"} {
+		if strings.Contains(agent, marker) {
+			return "mobile"
+		}
+	}
+	return "desktop"
 }
 
 func sessionTTL(seconds int64, fallback time.Duration) time.Duration {
@@ -300,7 +313,6 @@ func (app *App) Handler() http.Handler {
 			if request.Method != "GET" {
 				app.writeMu.Lock()
 				defer app.writeMu.Unlock()
-				app.store.audit(request.Method+" "+apiPath, principal, clientIP(request), false)
 			}
 			app.api(writer, request, apiPath, principal)
 			return
@@ -392,23 +404,26 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 			fail(writer, 429, "尝试过于频繁，请稍后再试")
 			return true
 		}
+		// 命中 IP 黑名单直接拒绝，并记录一次失败登录。
+		if ip := clientIP(request); app.ipBlocked(ip) {
+			app.store.recordLogin(ip, loginPlatform(request), loginAddress(ip), false)
+			fail(writer, 403, "该 IP 已被加入黑名单")
+			return true
+		}
 		var body Object
 		if err := decode(request, &body); err != nil {
 			fail(writer, 400, err.Error())
 			return true
 		}
 		passwordHash := app.store.setting("password", "")
+		ip := clientIP(request)
+		platform := loginPlatform(request)
 		if passwordHash == "" || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(text(body["password"]))) != nil || text(body["username"]) != app.store.setting("username", "") {
+			if passwordHash != "" {
+				app.store.recordLogin(ip, platform, loginAddress(ip), false)
+			}
 			fail(writer, 401, "用户名或密码错误")
 			return true
-		}
-		ip := clientIP(request)
-		remote := false
-		if ip != "" {
-			var previous string
-			if err := app.store.db.QueryRow("SELECT ip FROM audit WHERE action='login' AND actor='admin' AND ip<>'' ORDER BY id DESC LIMIT 1").Scan(&previous); err == nil && previous != "" && previous != ip {
-				remote = true
-			}
 		}
 		token, err := app.newSession("admin", 24*time.Hour)
 		if err != nil {
@@ -416,7 +431,7 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 			return true
 		}
 		http.SetCookie(writer, &http.Cookie{Name: "cabbage_session", Value: token, HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteStrictMode, Path: "/", MaxAge: 86400})
-		app.store.audit("login", "admin", ip, remote)
+		app.store.recordLogin(ip, platform, loginAddress(ip), true)
 		ok(writer, Object{"token": token, "token_type": "Bearer", "expiration": time.Now().Add(24 * time.Hour).Unix(), "username": text(body["username"])})
 		return true
 	}
@@ -459,8 +474,8 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 func (app *App) changeUser(body Object) error {
 	username := strings.TrimSpace(text(body["username"]))
 	password := text(body["password"])
-	if len(username) < 2 || len(username) > 64 || len(password) < 12 || len(password) > 72 {
-		return errors.New("用户名需为 2–64 字节，密码需为 12–72 字节")
+	if len(username) < 2 || len(username) > 64 || len(password) < 6 || len(password) > 72 {
+		return errors.New("用户名需为 2–64 字节，密码需为 6–72 字节")
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -535,7 +550,7 @@ func (app *App) allowed(principal, resource string) bool {
 	if principal == "admin" {
 		return true
 	}
-	if resource == "apps" || resource == "user" || resource == "system" || resource == "backups" || resource == "audit" {
+	if resource == "apps" || resource == "user" || resource == "system" || resource == "backups" {
 		return false
 	}
 	item, err := app.store.get("apps", integer(strings.TrimPrefix(principal, "app:")))

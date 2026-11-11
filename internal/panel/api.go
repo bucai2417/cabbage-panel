@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -38,26 +40,6 @@ func (app *App) api(writer http.ResponseWriter, request *http.Request, path, pri
 		app.logsAPI(writer, request, tail)
 	case "system":
 		app.systemAPI(writer, request, tail)
-	case "audit":
-		if request.Method != "GET" {
-			fail(writer, 405, "方法不支持")
-			return
-		}
-		rows, err := app.store.db.Query("SELECT id,action,actor,created,ip,remote FROM audit ORDER BY id DESC LIMIT 200")
-		if err != nil {
-			apiError(writer, err)
-			return
-		}
-		defer rows.Close()
-		result := []Object{}
-		for rows.Next() {
-			var id, remote int64
-			var action, actor, created, ip string
-			if rows.Scan(&id, &action, &actor, &created, &ip, &remote) == nil {
-				result = append(result, Object{"id": id, "action": action, "actor": actor, "created": created, "ip": ip, "remote": remote == 1})
-			}
-		}
-		ok(writer, result)
 	case "user":
 		if tail == "logout" && request.Method == "POST" {
 			token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
@@ -71,8 +53,22 @@ func (app *App) api(writer http.ResponseWriter, request *http.Request, path, pri
 			ok(writer, nil)
 			return
 		}
+		if tail == "login-log" && request.Method == "GET" {
+			logs, err := app.store.loginLogs()
+			if err != nil {
+				apiError(writer, err)
+				return
+			}
+			ok(writer, app.enrichLoginLogs(logs))
+			return
+		}
+		if tail == "ip-blacklist" {
+			app.ipBlacklistAPI(writer, request)
+			return
+		}
 		if tail == "" && request.Method == "GET" {
-			ok(writer, Object{"username": app.store.setting("username", ""), "role": "admin"})
+			// 对齐青龙 GET /api/user：{username, avatar, twoFactorActivated}。
+			ok(writer, Object{"username": app.store.setting("username", ""), "avatar": "", "twoFactorActivated": false})
 			return
 		}
 		if tail == "" && request.Method == "PUT" {
@@ -110,11 +106,8 @@ func (app *App) validate(kind string, item Object, update bool) error {
 		if len(text(item["command"])) > 32768 {
 			return errors.New("命令过长")
 		}
-		if spec := text(item["schedule"]); spec != "" {
-			if _, err := scheduleParser.Parse(spec); err != nil {
-				return fmt.Errorf("Cron 表达式无效: %w", err)
-			}
-		}
+		// cron 表达式不强制校验：无效或非标准写法允许保存，只是不会自动调度。
+		// 用户在任务列表里仍可手动运行。
 		if integer(item["timeout"]) < 0 || integer(item["timeout"]) > 604800 {
 			return errors.New("超时范围为 0–604800 秒")
 		}
@@ -136,11 +129,7 @@ func (app *App) validate(kind string, item Object, update bool) error {
 		if strings.HasPrefix(text(item["branch"]), "-") {
 			return errors.New("分支名称无效")
 		}
-		if spec := text(item["schedule"]); spec != "" {
-			if _, err := scheduleParser.Parse(spec); err != nil {
-				return fmt.Errorf("Cron 表达式无效: %w", err)
-			}
-		}
+		// 订阅的 cron 同样不强制校验，无效规则只是不会自动同步。
 		for _, field := range []string{"whitelist", "blacklist"} {
 			if text(item[field]) != "" {
 				if _, err := regexp.Compile(text(item[field])); err != nil {
@@ -204,7 +193,143 @@ func defaults(kind string, item Object) Object {
 	if kind == "crons" {
 		item["status"] = 1
 	}
+	if kind == "envs" {
+		if _, found := item["remarks"]; !found {
+			item["remarks"] = ""
+		}
+	}
 	return item
+}
+
+// jsTimestamp 兼容青龙的 new Date().toString() 时间字符串。
+func compatTimestamp(item Object) string {
+	switch value := item["timestamp"].(type) {
+	case string:
+		if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+			return jsTimestamp(parsed)
+		}
+		return value
+	case float64:
+		if value > 0 {
+			return jsTimestamp(time.UnixMilli(int64(value)))
+		}
+	case int64:
+		if value > 0 {
+			return jsTimestamp(time.UnixMilli(value))
+		}
+	}
+	if created, valid := item["createdAt"].(string); valid {
+		if parsed, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			return jsTimestamp(parsed)
+		}
+	}
+	return jsTimestamp(time.Now())
+}
+
+// cronCompat 对齐青龙（稳定版）CronItem：
+// 含 _id（字符串）、timeoutMs、notifyOnFinish、nextRunTime；extra_schedules 未设置时为 []。
+// 面板内部字段（lastStatus、nextRun、duration、runningCount、remarks）保留供网页使用。
+func cronCompat(item Object) Object {
+	item["_id"] = text(item["id"])
+	item["saved"] = true
+	item["isSystem"] = integer(item["isSystem"])
+	item["isDisabled"] = integer(item["isDisabled"])
+	item["isPinned"] = integer(item["isPinned"])
+	item["allow_multiple_instances"] = 0
+	if boolean(item["allowConcurrent"]) {
+		item["allow_multiple_instances"] = 1
+	}
+	item["notifyOnFinish"] = integer(item["notifyOnFinish"])
+	item["timeoutMs"] = integer(item["timeout"]) * 1000
+	item["last_running_time"] = integer(item["last_running_time"])
+	item["last_execution_time"] = integer(item["last_execution_time"])
+	item["nextRunTime"] = integer(item["nextRunTime"])
+	for _, key := range []string{"pid", "sub_id", "task_before", "task_after", "work_dir"} {
+		if _, found := item[key]; !found {
+			item[key] = nil
+		}
+	}
+	if item["extra_schedules"] == nil {
+		item["extra_schedules"] = []any{}
+	}
+	if item["log_path"] == nil {
+		item["log_path"] = ""
+	}
+	// log_name 未指定时，青龙用「{脚本名}_{任务ID}.log」。
+	if text(item["log_name"]) == "" {
+		item["log_name"] = defaultLogName(text(item["command"]), integer(item["id"]))
+	}
+	item["timestamp"] = compatTimestamp(item)
+	return item
+}
+
+// defaultLogName 复刻青龙 getUniqPath：取命令中的脚本名（去扩展名）再拼 _{id}.log。
+func defaultLogName(command string, id int64) string {
+	name := scriptNameFromCommand(command)
+	if name == "" {
+		name = "task"
+	}
+	if id > 0 {
+		return fmt.Sprintf("%s_%d.log", name, id)
+	}
+	return name + ".log"
+}
+
+// scriptNameFromCommand 从命令里提取脚本文件名并去掉扩展名，用于默认 log_name。
+func scriptNameFromCommand(command string) string {
+	fields := strings.Fields(command)
+	for _, field := range fields {
+		if strings.Contains(field, ".") && !strings.HasPrefix(field, "-") {
+			base := filepath.Base(field)
+			if index := strings.LastIndex(base, "."); index > 0 {
+				return base[:index]
+			}
+		}
+	}
+	return ""
+}
+
+// envCompat 对齐青龙 Env 模型：没有 _id，只有 id；timestamp 为 new Date().toString() 形式。
+func envCompat(item Object) Object {
+	delete(item, "isDisabled")
+	delete(item, "_id")
+	item["status"] = integer(item["status"])
+	item["isPinned"] = integer(item["isPinned"])
+	item["position"] = integer(item["position"])
+	if item["remarks"] == nil {
+		item["remarks"] = ""
+	}
+	if item["labels"] == nil {
+		item["labels"] = []any{}
+	}
+	item["timestamp"] = compatTimestamp(item)
+	return item
+}
+
+func (app *App) cronView(item Object) Object {
+	return cronCompat(app.engine.decorate("crons", item))
+}
+
+// normalizeCronInput 接受青龙的 timeoutMs / allow_multiple_instances 写入字段，并忽略客户端回传的只读字段。
+// log_name / task_before / task_after / work_dir / notifyOnFinish 是用户可写字段，保留。
+func normalizeCronInput(item Object) {
+	if value, found := item["timeoutMs"]; found {
+		if millis := integer(value); millis > 0 {
+			item["timeout"] = millis / 1000
+		}
+	}
+	if value, found := item["allow_multiple_instances"]; found {
+		item["allowConcurrent"] = integer(value) == 1 || boolean(value)
+	}
+	for _, key := range []string{"_id", "saved", "pid", "log_path", "last_running_time", "last_execution_time", "nextRunTime", "nextRun", "lastRun", "lastFinish", "lastStatus", "duration", "runningCount", "status", "createdAt", "updatedAt", "queued_token", "timeoutMs", "allow_multiple_instances"} {
+		delete(item, key)
+	}
+}
+
+func normalizeEnvInput(item Object) {
+	for _, key := range []string{"_id", "isDisabled", "createdAt", "updatedAt"} {
+		delete(item, key)
+	}
 }
 
 func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, kind, tail string) {
@@ -214,7 +339,12 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 		return
 	}
 	if kind == "crons" && strings.HasPrefix(tail, "views") {
-		app.viewsAPI(writer, request, strings.TrimPrefix(tail, "views"))
+		app.viewsAPI(writer, request, strings.Trim(strings.TrimPrefix(tail, "views"), "/"))
+		return
+	}
+	// 青龙 GET /crons/import：从 crontab 导入任务，面板没有系统 crontab，返回空结果。
+	if kind == "crons" && tail == "import" && method == "GET" {
+		ok(writer, []Object{})
 		return
 	}
 	if tail == "" && method == "GET" {
@@ -233,8 +363,15 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 			if kind == "dependencies" && request.URL.Query().Get("type") != "" && text(item["type"]) != request.URL.Query().Get("type") {
 				continue
 			}
-			if kind == "crons" || kind == "subscriptions" {
+			switch kind {
+			case "crons":
+				item = app.cronView(item)
+			case "envs":
+				item = envCompat(item)
+			case "subscriptions":
 				item = app.engine.decorate(kind, item)
+			case "dependencies":
+				item = dependencyCompat(item, app.dependencyLog(integer(item["id"])))
 			}
 			delete(item, "secret_hash")
 			filtered = append(filtered, item)
@@ -284,6 +421,7 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 			if end > total {
 				end = total
 			}
+			// data 直接是任务数组，不再嵌套分页对象。
 			ok(writer, filtered[start:end])
 			return
 		}
@@ -311,6 +449,7 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 			}
 			batch = append(batch, item)
 		}
+		// 青龙 POST /crons 接收单个对象；数组仍接受以兼容批量写入。
 		if len(batch) == 0 || len(batch) > 500 || (method == "PUT" && len(batch) != 1) {
 			fail(writer, 400, "记录数量无效")
 			return
@@ -319,6 +458,12 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 			if item == nil {
 				fail(writer, 400, "记录不能为空")
 				return
+			}
+			if kind == "crons" {
+				normalizeCronInput(item)
+			}
+			if kind == "envs" {
+				normalizeEnvInput(item)
 			}
 			if method == "PUT" {
 				old, err := app.store.get(kind, integer(item["id"]))
@@ -400,6 +545,14 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 		if kind == "crons" || kind == "subscriptions" {
 			app.engine.reschedule()
 		}
+		for index := range result {
+			switch kind {
+			case "crons":
+				result[index] = app.cronView(result[index])
+			case "envs":
+				result[index] = envCompat(result[index])
+			}
+		}
 		if isArray {
 			ok(writer, result)
 		} else {
@@ -446,6 +599,83 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 			}
 		}
 		ok(writer, nil)
+		return
+	}
+	// 青龙 /envs/name：批量改名。
+	if kind == "envs" && tail == "name" && method == "PUT" {
+		var body struct {
+			IDs  []int64 `json:"ids"`
+			Name string  `json:"name"`
+		}
+		if err := decode(request, &body); err != nil {
+			apiError(writer, err)
+			return
+		}
+		if len(body.IDs) == 0 || !envName.MatchString(body.Name) {
+			fail(writer, 400, "变量名无效")
+			return
+		}
+		for _, id := range body.IDs {
+			if _, err := app.store.get(kind, id); err != nil {
+				apiError(writer, err)
+				return
+			}
+			if _, err := app.store.save(kind, Object{"id": id, "name": body.Name}); err != nil {
+				apiError(writer, err)
+				return
+			}
+		}
+		ok(writer, nil)
+		return
+	}
+	// 青龙 /envs/upload：上传 JSON 文件批量导入变量。
+	if kind == "envs" && tail == "upload" && method == "POST" {
+		if err := request.ParseMultipartForm(5 << 20); err != nil {
+			fail(writer, 400, "请使用 multipart/form-data 上传 env 文件")
+			return
+		}
+		file, _, err := request.FormFile("env")
+		if err != nil {
+			fail(writer, 400, "缺少 env 文件字段")
+			return
+		}
+		defer file.Close()
+		var payload []Object
+		if err := json.NewDecoder(io.LimitReader(file, 5<<20)).Decode(&payload); err != nil {
+			fail(writer, 400, "文件内容必须是变量对象数组")
+			return
+		}
+		created := []Object{}
+		position := int64(0)
+		if existing, _ := app.store.list("envs"); len(existing) > 0 {
+			for _, entry := range existing {
+				if value := integer(entry["position"]); value > position {
+					position = value
+				}
+			}
+			position++
+		}
+		for _, item := range payload {
+			if item == nil {
+				continue
+			}
+			name := text(item["name"])
+			value := text(item["value"])
+			if !envName.MatchString(name) || value == "" {
+				fail(writer, 400, "每条数据的 name 或 value 不能为空")
+				return
+			}
+			record := Object{"name": name, "value": value, "remarks": text(item["remarks"]), "labels": item["labels"], "position": position}
+			defaults(kind, record)
+			position++
+			saved, err := app.store.save(kind, record)
+			if err != nil {
+				apiError(writer, err)
+				return
+			}
+			created = append(created, envCompat(saved))
+		}
+		ok(writer, created)
 		return
 	}
 	if (tail == "" && method == "DELETE") || ((method == "PUT" || method == "DELETE") && contains([]string{"run", "stop", "enable", "disable", "pin", "unpin", "reinstall", "cancel", "force"}, tail)) {
@@ -533,11 +763,16 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 			return
 		}
 		if len(segments) == 1 && method == "GET" {
-			if kind == "crons" || kind == "subscriptions" {
+			switch kind {
+			case "crons":
+				item = app.cronView(item)
+			case "envs":
+				item = envCompat(item)
+			case "subscriptions":
 				item = app.engine.decorate(kind, item)
 			}
 			if kind == "dependencies" {
-				item["log"] = app.latestLog(kind, id)
+				item = dependencyCompat(item, app.dependencyLog(id))
 			}
 			delete(item, "secret_hash")
 			ok(writer, item)
@@ -547,7 +782,13 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 			switch segments[1] {
 			case "log":
 				if method == "GET" {
-					ok(writer, app.latestLog(kind, id))
+					query := request.URL.Query()
+					respond(writer, 200, app.cronLogPayload(
+						kind, id,
+						integer(query.Get("offset")),
+						integer(query.Get("limit")),
+						query.Get("tail") == "true" || query.Get("tail") == "1",
+					))
 					return
 				}
 			case "logs", "instances":
@@ -708,11 +949,32 @@ func contains(items []string, value string) bool {
 }
 
 func (app *App) viewsAPI(writer http.ResponseWriter, request *http.Request, tail string) {
+	// 补齐青龙 CronView 字段：position/isDisabled/filters/sorts/filterRelation/type。
+	decorate := func(item Object) Object {
+		if _, found := item["position"]; !found {
+			item["position"] = integer(item["id"]) * 1000000
+		}
+		if _, found := item["isDisabled"]; !found {
+			item["isDisabled"] = 0
+		}
+		for _, key := range []string{"filters", "sorts", "filterRelation"} {
+			if _, found := item[key]; !found {
+				item[key] = nil
+			}
+		}
+		if _, found := item["type"]; !found {
+			item["type"] = 0
+		}
+		return item
+	}
 	if tail == "" && request.Method == "GET" {
 		items, err := app.store.list("views")
 		if err != nil {
 			apiError(writer, err)
 			return
+		}
+		for index := range items {
+			items[index] = decorate(items[index])
 		}
 		ok(writer, items)
 		return
@@ -746,6 +1008,60 @@ func (app *App) viewsAPI(writer http.ResponseWriter, request *http.Request, tail
 		}
 		for _, id := range ids {
 			if err := app.store.remove("views", id); err != nil {
+				apiError(writer, err)
+				return
+			}
+		}
+		ok(writer, nil)
+		return
+	}
+	if tail == "move" && request.Method == "PUT" {
+		var body struct {
+			FromIndex int64 `json:"fromIndex"`
+			ToIndex   int64 `json:"toIndex"`
+			ID        int64 `json:"id"`
+		}
+		if err := decode(request, &body); err != nil {
+			apiError(writer, err)
+			return
+		}
+		items, err := app.store.list("views")
+		if err != nil {
+			apiError(writer, err)
+			return
+		}
+		sort.SliceStable(items, func(left, right int) bool { return integer(items[left]["position"]) < integer(items[right]["position"]) })
+		from, to := int(body.FromIndex), int(body.ToIndex)
+		if from < 0 || from >= len(items) || to < 0 || to >= len(items) {
+			fail(writer, 400, "排序位置无效")
+			return
+		}
+		moved := items[from]
+		ordered := append(append(append([]Object{}, items[:from]...), items[from+1:]...), Object{})
+		copy(ordered[to+1:], ordered[to:])
+		ordered[to] = moved
+		for index, item := range ordered {
+			if _, err := app.store.save("views", Object{"id": item["id"], "position": (index + 1) * 1000000}); err != nil {
+				apiError(writer, err)
+				return
+			}
+		}
+		ok(writer, nil)
+		return
+	}
+	// 青龙 /crons/views/enable|disable：批量启用或停用视图。
+	if (tail == "enable" || tail == "disable") && request.Method == "PUT" {
+		ids, err := parseIDs(request)
+		if err != nil {
+			apiError(writer, err)
+			return
+		}
+		disabled := 0
+		if tail == "disable" {
+			disabled = 1
+		}
+		for _, id := range ids {
+			if _, err := app.store.save("views", Object{"id": id, "isDisabled": disabled}); err != nil {
 				apiError(writer, err)
 				return
 			}

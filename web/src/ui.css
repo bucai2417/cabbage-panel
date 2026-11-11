@@ -358,11 +358,6 @@ body.debug-open{overflow:hidden}
 .mcp-token-box textarea{font-family:Consolas,monospace;font-size:10px;line-height:1.5;color:#4f6d5b;background:#f7faf8}
 .mcp-token-box .actions{justify-content:flex-end}
 .token-form select{min-width:120px}
-.audit-remote{background:#fff7f5}
-.audit-remote td{border-bottom-color:#f7e3df}
-.audit-ip{white-space:nowrap;font-size:11px;color:#7b8d81}
-.audit-ip.remote{color:#d94a41;font-weight:600}
-.audit-badge{margin-left:7px}
 
 /* 开放应用卡片列表 */
 .app-list-toolbar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-bottom:1px solid #eef3ef;font-size:11px;color:#7f9388}

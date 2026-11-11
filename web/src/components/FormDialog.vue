@@ -27,6 +27,7 @@ onUnmounted(() => { document.removeEventListener('keydown', keydown); previous?.
         <textarea v-if="field.type === 'textarea'" v-model="model[field.key]" :aria-label="field.label" :rows="field.rows || 4" :required="field.required" :placeholder="field.placeholder" :class="{ code: field.code }" />
         <select v-else-if="field.type === 'select'" v-model="model[field.key]" :aria-label="field.label"><option v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</option></select>
         <input v-else-if="field.type === 'checkbox'" v-model="model[field.key]" :aria-label="field.label" type="checkbox" />
+        <input v-else-if="field.type === 'file'" :aria-label="field.label" type="file" :required="field.required" @change="model[field.key] = $event.target.files[0]" />
         <input v-else v-model="model[field.key]" :aria-label="field.label" :type="field.type || 'text'" :required="field.required" :placeholder="field.placeholder" :min="field.min" :max="field.max" :minlength="field.minlength" :autocomplete="field.type === 'password' ? 'new-password' : 'off'" />
         <small v-if="field.hint">{{ field.hint }}</small>
       </label><slot /></div>

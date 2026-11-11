@@ -7,7 +7,7 @@ import FormDialog from '../components/FormDialog.vue'
 import FileEditor from '../components/FileEditor.vue'
 import NotificationSettings from '../components/NotificationSettings.vue'
 const props = defineProps({ initialMode: { type: String, default: 'scripts' } })
-const mode = ref(props.initialMode), files = ref([]), active = ref(''), expanded = ref(new Set()), selected = ref([]), search = ref(''), modal = ref(null), saving = ref(false), editor = ref(null), menu = ref(null), fullScreen = ref(false), configTab = ref('files'), notificationForm = ref(null), operationErrors = ref([])
+const mode = ref(props.initialMode), files = ref([]), active = ref(''), expanded = ref(new Set()), selected = ref([]), search = ref(''), modal = ref(null), saving = ref(false), editor = ref(null), menu = ref(null), fullScreen = ref(false), configTab = ref('files'), notificationForm = ref(null), operationErrors = ref([]), createMenu = ref(false)
 const directories = computed(() => files.value.filter(file => !file.isLeaf).sort((left, right) => left.path.localeCompare(right.path, 'zh-CN')))
 const visible = computed(() => {
   const children = new Map(), included = new Set(), query = search.value.trim().toLowerCase()
@@ -46,22 +46,96 @@ async function operate(operation, paths) {
   modal.value = { type: operation, paths, initial: { destination: operation === 'rename' ? paths[0] : '' } }
 }
 async function submitOperation(operation, paths, destination = '') { saving.value = true; try { const result = await api('/' + mode.value + '/operations', 'POST', { operation, paths, destination }); operationErrors.value = result.filter(item => !item.success); const successes = result.filter(item => item.success); for (const item of successes) { if (active.value === item.path || active.value.startsWith(item.path + '/')) { if (operation === 'delete') active.value = ''; if (['move', 'rename'].includes(operation)) active.value = item.destination + active.value.slice(item.path.length) } } if (active.value) expandParents(active.value); await load(); selected.value = operationErrors.value.map(item => item.path); modal.value = null; const updated = successes.reduce((sum, item) => sum + item.updatedTasks, 0); toast('完成 ' + successes.length + ' 项' + (updated ? '，同步更新 ' + updated + ' 个任务路径' : ''), operationErrors.value.length ? 'error' : 'success') } catch (error) { toast(error.message, 'error') } finally { saving.value = false } }
-async function submit(values) { if (!['file', 'folder'].includes(modal.value.type)) return submitOperation(modal.value.type, modal.value.paths, values.destination); if (!await canLeave()) return; saving.value = true; try { const type = modal.value.type; await api('/' + mode.value + (type === 'folder' ? '/folder' : ''), 'POST', type === 'folder' ? { path: values.filename } : { filename: values.filename, content: values.content || '' }); modal.value = null; await load(); expandParents(values.filename); if (type === 'folder') expanded.value = new Set([...expanded.value, values.filename]); else active.value = values.filename; toast(type === 'folder' ? '文件夹已创建' : '文件已创建') } catch (error) { toast(error.message, 'error') } finally { saving.value = false } }
-const fields = computed(() => !modal.value ? [] : ['file', 'folder'].includes(modal.value.type) ? [{ key: 'filename', label: modal.value.type === 'folder' ? '文件夹路径' : '文件路径', required: true, placeholder: modal.value.type === 'folder' ? '工具/每日任务' : '工具/example.py', hint: '路径使用 / 分隔，支持中文名称。' }] : modal.value.type === 'rename' ? [{ key: 'destination', label: '新路径', required: true }] : [{ key: 'destination', label: '目标文件夹', type: 'select', options: [{ value: '', label: '/（根目录）' }, ...directories.value.map(file => ({ value: file.path, label: file.path }))], hint: '保留原文件名；已存在的目标不会覆盖。' }])
-const titles = { file: '新建文件', folder: '新建文件夹', move: '移动所选文件', copy: '复制所选文件', rename: '重命名' }
+async function submit(values) {
+  if (!['file', 'folder', 'upload', 'remote'].includes(modal.value.type)) return submitOperation(modal.value.type, modal.value.paths, values.destination)
+  if (!await canLeave()) return
+  saving.value = true
+  try {
+    const type = modal.value.type
+    if (type === 'upload') {
+      if (!values.file) throw new Error('请选择要上传的文件')
+      const form = new FormData()
+      form.append('file', values.file)
+      if (values.directory) form.append('path', values.directory)
+      const result = await api('/' + mode.value + '/upload', 'POST', form)
+      modal.value = null; await load(); expandParents(result.path); active.value = result.path
+      toast('已上传 ' + result.path)
+      return
+    }
+    if (type === 'remote') {
+      if (!values.url) throw new Error('请填写外链地址')
+      if (!values.filename) throw new Error('请填写保存的文件名')
+      await api('/' + mode.value + '/download', 'POST', { url: values.url, filename: values.filename, path: values.directory || '' })
+      const saved = (values.directory ? values.directory + '/' : '') + values.filename
+      modal.value = null; await load(); expandParents(saved); active.value = saved
+      toast('已从外链创建 ' + saved)
+      return
+    }
+    await api('/' + mode.value + (type === 'folder' ? '/folder' : ''), 'POST', type === 'folder' ? { path: values.filename } : { filename: values.filename, content: values.content || '' })
+    modal.value = null
+    await load()
+    expandParents(values.filename)
+    if (type === 'folder') expanded.value = new Set([...expanded.value, values.filename])
+    else active.value = values.filename
+    toast(type === 'folder' ? '文件夹已创建' : '文件已创建')
+  } catch (error) { toast(error.message, 'error') } finally { saving.value = false }
+}
+const fields = computed(() => {
+  if (!modal.value) return []
+  const type = modal.value.type
+  if (type === 'upload') return [
+    { key: 'directory', label: '目标文件夹', type: 'select', options: [{ value: '', label: '/（根目录）' }, ...directories.value.map(file => ({ value: file.path, label: file.path }))], hint: '上传后会放在该文件夹下。' },
+    { key: 'file', label: '选择本地文件', type: 'file', required: true, hint: '支持任意文本或脚本文件，最大 32MB；同名文件不会被覆盖。' },
+  ]
+  if (type === 'remote') return [
+    { key: 'directory', label: '目标文件夹', type: 'select', options: [{ value: '', label: '/（根目录）' }, ...directories.value.map(file => ({ value: file.path, label: file.path }))] },
+    { key: 'filename', label: '保存文件名', required: true, placeholder: 'example.py', hint: '可带子目录，例如 tools/example.py。' },
+    { key: 'url', label: '外链地址', required: true, placeholder: 'https://example.com/script.py', hint: '仅支持 HTTP(S)，最大 4MB，内容需为 UTF-8 文本。' },
+  ]
+  if (['file', 'folder'].includes(type)) return [{ key: 'filename', label: type === 'folder' ? '文件夹路径' : '文件路径', required: true, placeholder: type === 'folder' ? '工具/每日任务' : '工具/example.py', hint: '路径使用 / 分隔，支持中文名称。' }]
+  if (type === 'rename') return [{ key: 'destination', label: '新路径', required: true }]
+  return [{ key: 'destination', label: '目标文件夹', type: 'select', options: [{ value: '', label: '/（根目录）' }, ...directories.value.map(file => ({ value: file.path, label: file.path }))], hint: '保留原文件名；已存在的目标不会覆盖。' }]
+})
+const titles = { file: '新建文件', folder: '新建文件夹', upload: '从本地上传', remote: '从外链创建', move: '移动所选文件', copy: '复制所选文件', rename: '重命名' }
 function showMenu(file, event) { const bounds = event.currentTarget.getBoundingClientRect(); menu.value = { file, left: Math.max(8, Math.min(bounds.right - 190, window.innerWidth - 200)), top: Math.max(8, Math.min(bounds.bottom + 4, window.innerHeight - 320)) } }
-function closeMenu(event) { if (!event.target.closest('.file-context-menu') && !event.target.closest('.file-menu-trigger')) menu.value = null }
+function closeMenu(event) { if (!event.target.closest('.file-context-menu') && !event.target.closest('.file-menu-trigger') && !event.target.closest('.create-menu-wrap')) { menu.value = null; createMenu.value = false } }
 function keyboard(event) { if (event.key === 'Escape' && !event.defaultPrevented) { menu.value = null; if (!modal.value) fullScreen.value = false } }
 function selectAll(event) { selected.value = event.target.checked ? selectable.value.map(file => file.path) : [] }
 function download(file) { action(async () => { const content = await api('/' + mode.value + '/detail?path=' + encodeURIComponent(file.path)); const address = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' })); const link = document.createElement('a'); link.href = address; link.download = file.name; link.click(); setTimeout(() => URL.revokeObjectURL(address), 1000) }); menu.value = null }
+function toggleCreateMenu() { createMenu.value = !createMenu.value }
+// 批量下载：选中文件打包成 ZIP；未选中时下载当前打开的文件。
+async function downloadSelected() {
+  const paths = selected.value.length ? selected.value.filter(path => files.value.find(file => file.path === path && file.isLeaf)) : (active.value ? [active.value] : [])
+  if (!paths.length) return toast('请选择要下载的文件', 'error')
+  try {
+    const response = await fetch('/api/' + mode.value + '/archive', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(paths),
+    })
+    if (!response.ok) {
+      let message = '打包下载失败'
+      try { message = (await response.json()).message || message } catch { /* 保留默认提示 */ }
+      throw new Error(message)
+    }
+    const blob = await response.blob()
+    const address = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = address
+    link.download = mode.value + '-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '') + '.zip'
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(address), 1000)
+    toast('已打包 ' + paths.length + ' 个文件')
+  } catch (error) { toast(error.message, 'error') }
+}
 onMounted(() => { action(load); document.addEventListener('pointerdown', closeMenu); window.addEventListener('keydown', keyboard) })
 onBeforeUnmount(() => { document.removeEventListener('pointerdown', closeMenu); window.removeEventListener('keydown', keyboard) })
 </script>
 <template>
-  <div class="section-toolbar"><div class="tabs"><button :class="{ active: mode === 'scripts' }" @click="switchMode('scripts')">脚本文件</button><button :class="{ active: mode === 'configs' }" @click="switchMode('configs')">配置文件</button></div><div v-if="configTab === 'files'" class="actions"><button class="button compact" @click="create('folder')"><Icon name="FolderPlus" :size="16" />新建文件夹</button><button class="button primary compact" @click="create('file')"><Icon name="Plus" :size="16" />新建文件</button></div></div>
+  <div class="section-toolbar"><div class="tabs"><button :class="{ active: mode === 'scripts' }" @click="switchMode('scripts')">脚本文件</button><button :class="{ active: mode === 'configs' }" @click="switchMode('configs')">配置文件</button></div><div v-if="configTab === 'files'" class="actions"><button class="button compact" @click="create('folder')"><Icon name="FolderPlus" :size="16" />新建文件夹</button><div class="create-menu-wrap"><button class="button primary compact" @click="toggleCreateMenu"><Icon name="Plus" :size="16" />新建文件</button><div v-if="createMenu" class="file-context-menu create-menu" role="menu"><button role="menuitem" @click="create('file'); createMenu = false"><Icon name="FilePlus" :size="15" />创建空文件</button><button role="menuitem" @click="create('upload'); createMenu = false"><Icon name="Upload" :size="15" />从本地上传</button><button role="menuitem" @click="create('remote'); createMenu = false"><Icon name="Link" :size="15" />从外链创建</button></div></div></div></div>
   <div v-if="mode === 'configs'" class="config-tabs tabs"><button :class="{ active: configTab === 'files' }" @click="switchConfig('files')">系统配置与执行钩子</button><button :class="{ active: configTab === 'notifications' }" @click="switchConfig('notifications')"><Icon name="Bell" :size="15" />通知配置</button></div>
   <NotificationSettings v-if="mode === 'configs' && configTab === 'notifications'" ref="notificationForm" />
-  <template v-else><div v-if="selected.length" class="bulk-bar"><span>已选择 {{ selected.length }} 项</span><button :disabled="saving" @click="operate('move', selected)">移动</button><button :disabled="saving" @click="operate('copy', selected)">复制</button><button class="danger-text" :disabled="saving" @click="operate('delete', selected)">删除</button><button @click="selected = []">取消选择</button></div><div v-if="operationErrors.length" class="operation-errors" role="alert"><div v-for="item in operationErrors" :key="item.path">{{ item.path }}：{{ item.error }}</div><button class="small-button" @click="operationErrors = []">关闭</button></div>
+  <template v-else><div v-if="selected.length" class="bulk-bar"><span>已选择 {{ selected.length }} 项</span><button :disabled="saving" @click="downloadSelected"><Icon name="Download" :size="15" />下载</button><button :disabled="saving" @click="operate('move', selected)">移动</button><button :disabled="saving" @click="operate('copy', selected)">复制</button><button class="danger-text" :disabled="saving" @click="operate('delete', selected)">删除</button><button @click="selected = []">取消选择</button></div><div v-if="operationErrors.length" class="operation-errors" role="alert"><div v-for="item in operationErrors" :key="item.path">{{ item.path }}：{{ item.error }}</div><button class="small-button" @click="operationErrors = []">关闭</button></div>
   <section class="card editor-layout" :class="{ 'workspace-fullscreen': fullScreen }"><aside class="file-browser"><div class="search-input"><Icon name="Search" :size="16" /><input v-model="search" aria-label="搜索文件" placeholder="搜索文件与文件夹…" /></div><div class="file-browser-heading"><label class="inline-check"><input type="checkbox" aria-label="选择可见文件" :checked="selectable.length > 0 && selectable.every(file => selected.includes(file.path))" :indeterminate="selected.length > 0 && !selectable.every(file => selected.includes(file.path))" @change="selectAll" />{{ files.filter(file => file.isLeaf).length }} 文件</label><div class="actions"><button class="icon-button" aria-label="展开全部文件夹" title="展开全部" @click="expanded = new Set(directories.map(file => file.path))"><Icon name="FolderOpen" :size="15" /></button><button class="icon-button" aria-label="折叠全部文件夹" title="折叠全部" @click="expanded = new Set()"><Icon name="Folder" :size="15" /></button><button class="icon-button" aria-label="刷新文件" @click="action(load)"><Icon name="RefreshCw" :size="15" /></button></div></div>
   <div class="file-tree" role="tree" aria-label="文件夹树"><div v-for="file in visible" :key="file.path" class="tree-row" :class="{ active: active === file.path, selected: selected.includes(file.path) }" :style="{ paddingLeft: 8 + file.depth * 15 + 'px' }" role="treeitem" :aria-level="file.depth + 1" :aria-expanded="file.isLeaf ? undefined : expanded.has(file.path) || !!search" :aria-selected="active === file.path"><input v-if="!file.builtin" v-model="selected" type="checkbox" :value="file.path" :aria-label="'选择文件 ' + file.path" /><span v-else class="builtin-file-marker" title="内置配置"><Icon name="LockKeyhole" :size="13" /></span><button class="tree-file-button" :title="file.path + (file.isLeaf ? ' · ' + bytes(file.size) : '')" @click="open(file)"><Icon :name="file.isLeaf ? 'FileCode2' : expanded.has(file.path) || search ? 'FolderOpen' : 'Folder'" :size="16" /><span>{{ file.name }}</span></button><button class="icon-button file-menu-trigger" :aria-label="'文件菜单 ' + file.path" aria-haspopup="menu" @click.stop="showMenu(file, $event)"><Icon name="MoreHorizontal" :size="16" /></button></div><p v-if="!visible.length" class="file-empty">{{ search ? '没有匹配的文件' : '暂无文件，可以创建文件夹或脚本。' }}</p></div></aside>
   <div class="editor-main"><div v-if="fullScreen" class="fullscreen-strip"><span>全屏工作区</span><button class="small-button" @click="fullScreen = false">退出全屏 · Esc</button></div><FileEditor v-if="active" :key="mode + active" ref="editor" :path="active" :kind="mode" @saved="load" @expand="fullScreen = !fullScreen" /><div v-else class="empty-state editor-empty"><div class="empty-icon"><Icon name="Code2" :size="34" /></div><h3>{{ mode === 'configs' ? '配置工作环境' : '选择一个脚本，开始编辑' }}</h3><p>{{ mode === 'configs' ? 'system.json 管理系统参数，notifications.json 管理通知，Shell 配置与前后置钩子在任务执行时生效。' : '支持文件夹树、多选、移动复制与创建定时任务。' }}</p><button class="button" @click="mode === 'configs' ? open(files.find(file => file.path === 'system.json')) : create('file')">{{ mode === 'configs' ? '打开系统配置' : '新建脚本' }}</button></div></div></section></template>

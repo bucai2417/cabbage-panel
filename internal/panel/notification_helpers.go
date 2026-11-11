@@ -38,22 +38,41 @@ func (app *App) helperNotification(writer http.ResponseWriter, request *http.Req
 		fail(writer, 400, "尚未启用通知渠道，请先配置通知")
 		return
 	}
+	// 脚本来源记为 script，便于在通知日志里区分系统通知与脚本通知。
+	app.recordNotifyLog(body.Title, body.Content, results, "script", "")
 	ok(writer, results)
 }
 
-func (app *App) installNotificationHelpers() error {
-	files := map[string]string{
-		"notify.py": `import json
+// notifyPySource 是随版本打包的通知脚本，签名与青龙一致：sendNotify(title, content)。
+const notifyPySource = `#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""大白菜面板通知助手，随版本内置。
+
+用法（在任务脚本中）：
+    from notify import sendNotify
+    sendNotify("标题", "内容")
+
+通知渠道在「配置文件 → 通知配置」中设置；本脚本通过面板注入的
+CABBAGE_NOTIFY_URL / CABBAGE_NOTIFY_TOKEN 转发，不读取青龙 config.sh。
+"""
+import json
 import os
 import urllib.request
 
 
-def send(title, content, *args, **kwargs):
+def sendNotify(title, content, *args, **kwargs):
     address = os.environ.get("CABBAGE_NOTIFY_URL", "")
     if not address:
         raise RuntimeError("请在大白菜面板任务中调用通知助手")
     payload = json.dumps({"title": str(title), "content": str(content)}, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(address, data=payload, headers={"Content-Type": "application/json; charset=utf-8", "Authorization": "Bearer " + os.environ.get("CABBAGE_NOTIFY_TOKEN", "")})
+    request = urllib.request.Request(
+        address,
+        data=payload,
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": "Bearer " + os.environ.get("CABBAGE_NOTIFY_TOKEN", ""),
+        },
+    )
     with urllib.request.urlopen(request, timeout=15) as response:
         result = json.loads(response.read().decode("utf-8"))
     failed = [item for item in result["data"] if not item.get("success")]
@@ -62,27 +81,61 @@ def send(title, content, *args, **kwargs):
     return result["data"]
 
 
-sendNotify = send
-`,
-		"sendNotify.js": `async function sendNotify(title, content) {
+send = sendNotify
+
+if __name__ == "__main__":
+    import sys
+
+    sendNotify(sys.argv[1] if len(sys.argv) > 1 else "通知", sys.argv[2] if len(sys.argv) > 2 else "")
+`
+
+// sendNotifyJSSource 是随版本打包的 Node 通知脚本，签名与青龙一致。
+const sendNotifyJSSource = `#!/usr/bin/env node
+/**
+ * 大白菜面板通知助手，随版本内置。
+ *
+ * 用法（在任务脚本中）：
+ *   const { sendNotify } = require('./sendNotify');
+ *   await sendNotify('标题', '内容');
+ *
+ * 通知渠道在「配置文件 → 通知配置」中设置；本脚本通过面板注入的
+ * CABBAGE_NOTIFY_URL / CABBAGE_NOTIFY_TOKEN 转发。
+ */
+async function sendNotify(title, content) {
   const address = process.env.CABBAGE_NOTIFY_URL;
   if (!address) throw new Error('请在大白菜面板任务中调用通知助手');
   const response = await fetch(address, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: 'Bearer ' + process.env.CABBAGE_NOTIFY_TOKEN },
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: 'Bearer ' + (process.env.CABBAGE_NOTIFY_TOKEN || ''),
+    },
     body: JSON.stringify({ title: String(title), content: String(content) }),
     signal: AbortSignal.timeout(15000),
   });
   const result = await response.json();
   if (!response.ok) throw new Error(result.message || '通知失败');
-  const failed = result.data.filter(item => !item.success);
+  const failed = (result.data || []).filter(item => !item.success);
   if (failed.length) throw new Error(failed.map(item => item.name + ': ' + item.error).join('; '));
   return result.data;
 }
+
 module.exports = { sendNotify, send: sendNotify };
-`,
+
+if (require.main === module) {
+  sendNotify(process.argv[2] || '通知', process.argv[3] || '').catch(error => {
+    console.error(error.message);
+    process.exit(1);
+  });
+}
+`
+
+func (app *App) installNotificationHelpers() error {
+	files := map[string]string{
+		"notify.py":     notifyPySource,
+		"sendNotify.js": sendNotifyJSSource,
 		"notify": `#!/usr/bin/env bash
-exec "$CABBAGE_PYTHON" -c 'import sys; from notify import send; send(sys.argv[1], sys.argv[2])' "$@"
+exec "$CABBAGE_PYTHON" -c 'import sys; from notify import sendNotify; sendNotify(sys.argv[1], sys.argv[2])' "$@"
 `,
 	}
 	for name, content := range files {
@@ -91,6 +144,21 @@ exec "$CABBAGE_PYTHON" -c 'import sys; from notify import send; send(sys.argv[1]
 			return err
 		}
 		if err := os.WriteFile(target, []byte(content), 0700); err != nil {
+			return err
+		}
+	}
+	// 同时投放一份到 scripts 目录，方便任务直接 import / require。
+	// 已存在时不覆盖，避免覆盖用户修改过的版本。
+	scriptDir := filepath.Join(app.root, "scripts")
+	if err := os.MkdirAll(scriptDir, 0700); err != nil {
+		return err
+	}
+	for name, content := range map[string]string{"notify.py": notifyPySource, "sendNotify.js": sendNotifyJSSource} {
+		target := filepath.Join(scriptDir, name)
+		if _, statErr := os.Lstat(target); statErr == nil {
+			continue
+		}
+		if err := os.WriteFile(target, []byte(content), 0644); err != nil {
 			return err
 		}
 	}

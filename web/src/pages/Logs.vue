@@ -74,7 +74,7 @@ function toggleAll(event) {
   checked.value = event.target.checked ? [...new Set([...checked.value, ...deletableRuns.value.map(run => run.id)])] : checked.value.filter(id => !deletableRuns.value.some(run => run.id === id))
 }
 async function load() {
-  records.value = await api('/logs?limit=1000')
+  records.value = await api('/logs/runs?limit=1000')
   checked.value = checked.value.filter(id => { const run = records.value.find(item => item.id === id); return run && !running(run) })
   if (activeRun.value) activeRun.value = records.value.find(run => run.id === activeRun.value.id) || null
   if (activeGroupKey.value && !activeRun.value) activeRun.value = groups.value.find(group => group.key === activeGroupKey.value)?.runs[0] || null

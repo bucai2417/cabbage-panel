@@ -52,9 +52,10 @@
 - 排序测试验证了新任务在上、禁用任务单独排在启用任务下方、置顶优先，以及环境变量状态筛选和置顶。
 - 后端验证脚本运行不再创建定时任务；调试运行使用编辑后的内容，临时目录在完成后清空。
 - 新增 `--web web/dist` 开发模式，已用磁盘标记文件和新资源哈希验证从目录读取前端；Playwright 通过 `CABBAGE_TEST_WEB_DIR=web/dist` 使用磁盘前端跑完 7 项测试，无需重编译 Go。Vite 代理支持 CABBAGE_DEV_API，前端热更新不需要构建 web 或重编译 Go。
-- 设置页滚动后导航实测 `position: sticky`、top 16px；Authorization 弹窗、应用卡片布局、Secret 查看弹窗和审计 IP 列已目视核对。异地登录红色样式由后端 remote 标记和前端 `.audit-remote` 规则覆盖。
+- 设置页滚动后导航实测 `position: sticky`、top 16px；Authorization 弹窗、应用卡片布局、Secret 查看弹窗和登录日志列已目视核对。
 - 应用卡片列表在 1440 视口实测无横向溢出；应用有效期、Client Secret 明文保存与再次查看、MCP 仅令牌配置均通过前后端验证。
 - 应用权限勾选区修复了全局复选框 `width:100%` 导致的挤压与横向滚动：桌面固定两列等宽网格，670px 窄屏单列，实测弹窗 scrollWidth 与 clientWidth 一致。
+- 任务与变量接口新增青龙形状契约测试：`_id` 字符串、`timestamp` 时间字符串、任务 `saved`/`isSystem`/`pid`/`log_path`/`log_name`/`last_running_time`/`last_execution_time`/`sub_id`/`extra_schedules`/`task_before`/`task_after`/`allow_multiple_instances`/`work_dir`/`timeoutMs`/`notifyOnFinish`/`nextRunTime`，并验证 `timeoutMs` 与 `allow_multiple_instances` 写入映射及变量不返回 `isDisabled`。
 - 设置页刷新后重新加载应用 Authorization 列表并恢复当前令牌；永久令牌不参与过期清理，应用过期后仍失效。`/open/crons` 实测返回数组，管理接口保持分页对象。
 - 环境变量列表验证了默认值显示、#ID 标识、最后修改时间列和对象安全格式化；列表图标不再使用容易误认为“{}”的 Braces。
 - 侧边栏精简与页面大标题移除后，桌面和 390×844 手机视口均无整页横向溢出；任务详情页内测量宽度与滚动宽度一致。

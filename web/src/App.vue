@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { api, action, notices } from './api'
 import { checkLeaveGuards } from './guard'
 import Icon from './components/Icon.vue'
@@ -9,19 +9,57 @@ import Tasks from './pages/Tasks.vue'
 import Resources from './pages/Resources.vue'
 import Scripts from './pages/Scripts.vue'
 import Logs from './pages/Logs.vue'
+import ApiDocs from './pages/ApiDocs.vue'
 import Settings from './pages/Settings.vue'
 
 const ready = ref(false), loggedIn = ref(false), initialized = ref(true), busy = ref(false), error = ref('')
 const user = ref(''), version = ref('1.1.0'), menuOpen = ref(false), globalSearch = ref('')
 const login = ref({ username: '', password: '', setupToken: '' })
+const remember = ref(false)
+const rememberKey = 'cabbage-remember-login'
+// 记住的凭据只做 Base64 编码，避免在 localStorage 里以明文直接可见。
+// 这是本地单用户面板的便利功能，不构成安全边界；共用电脑请勿勾选。
+function encodeRemember(value) {
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify(value))
+    let binary = ''
+    bytes.forEach(byte => { binary += String.fromCharCode(byte) })
+    return btoa(binary)
+  } catch { return '' }
+}
+function decodeRemember(text) {
+  try {
+    const binary = atob(text)
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
+    return JSON.parse(new TextDecoder().decode(bytes))
+  } catch { return null }
+}
+function restoreRemember() {
+  if (typeof localStorage === 'undefined') return
+  const saved = decodeRemember(localStorage.getItem(rememberKey) || '')
+  if (saved && saved.username) {
+    login.value.username = saved.username
+    login.value.password = saved.password || ''
+    remember.value = true
+  }
+}
+function persistRemember() {
+  if (typeof localStorage === 'undefined') return
+  if (remember.value && login.value.username) {
+    localStorage.setItem(rememberKey, encodeRemember({ username: login.value.username, password: login.value.password }))
+  } else {
+    localStorage.removeItem(rememberKey)
+  }
+}
 const navigation = [
   { id: 'dashboard', label: '仪表盘', icon: 'LayoutDashboard' },
   { id: 'tasks', label: '定时任务', icon: 'Clock3' },
   { id: 'scripts', label: '脚本管理', icon: 'SquareTerminal' },
-  { id: 'logs', label: '运行日志', icon: 'FileText' },
   { id: 'envs', label: '环境变量', icon: 'KeyRound' },
+  { id: 'logs', label: '运行日志', icon: 'FileText' },
   { id: 'subscriptions', label: '订阅管理', icon: 'GitBranch' },
   { id: 'dependencies', label: '依赖管理', icon: 'Package' },
+  { id: 'api-docs', label: '接口文档', icon: 'BookOpen' },
   { id: 'settings', label: '系统设置', icon: 'Settings2' },
 ]
 const routeAliases = { configs: 'scripts' }
@@ -84,11 +122,19 @@ async function submitLogin() {
   busy.value = true; error.value = ''
   try {
     if (!initialized.value) { await api('/user/init', 'POST', login.value); initialized.value = true }
-    const result = await api('/user/login', 'POST', login.value); user.value = result.username; loggedIn.value = true; login.value.password = ''; login.value.setupToken = ''
+    const result = await api('/user/login', 'POST', login.value); user.value = result.username; loggedIn.value = true
+    persistRemember()
+    login.value.password = ''; login.value.setupToken = ''
   } catch (failure) { error.value = failure.message } finally { busy.value = false }
 }
 async function logout() { await action(() => api('/user/logout', 'POST')); loggedIn.value = false }
-onMounted(() => { bootstrap(); window.addEventListener('hashchange', onHash); window.addEventListener('session-expired', expired); window.addEventListener('keydown', keyboard) })
+onMounted(async () => {
+  // 挂载后再恢复，确保 v-model 已完成首次绑定，密码框能正确回填。
+  restoreRemember()
+  await nextTick()
+  await bootstrap()
+  window.addEventListener('hashchange', onHash); window.addEventListener('session-expired', expired); window.addEventListener('keydown', keyboard)
+})
 onUnmounted(() => { window.removeEventListener('hashchange', onHash); window.removeEventListener('session-expired', expired); window.removeEventListener('keydown', keyboard) })
 </script>
 
@@ -97,7 +143,7 @@ onUnmounted(() => { window.removeEventListener('hashchange', onHash); window.rem
   <div v-else-if="!loggedIn" class="login-screen">
     <div class="login-brand"><img src="/logo.png" alt="白菜标志" /><span>大白菜面板</span><small>A LITTLE GREEN. A LOT DONE.</small></div>
     <section class="login-card"><span class="eyebrow">YOUR AUTOMATION WORKSPACE</span><h1>{{ initialized ? '欢迎回来。' : '种下自动化的第一步。' }}</h1><p>{{ initialized ? '登录大白菜面板，让工作轻一点。' : '创建管理员账户，开始您的自动化之旅。' }}</p>
-      <form @submit.prevent="submitLogin"><label v-if="!initialized" class="field"><span>首次设置密钥</span><input v-model="login.setupToken" aria-label="首次设置密钥" required type="password" autocomplete="off" placeholder="查看启动日志或 data/setup.key" /><small>仅首次初始化需要，用于确认您拥有这台服务器。</small></label><label class="field"><span>用户名</span><input v-model="login.username" autocomplete="username" required minlength="2" placeholder="请输入用户名" /></label><label class="field"><span>密码</span><input v-model="login.password" type="password" :autocomplete="initialized ? 'current-password' : 'new-password'" required :minlength="initialized ? 1 : 12" :placeholder="initialized ? '请输入密码' : '至少 12 个字符'" /></label><p v-if="error" class="inline-error" role="alert">{{ error }}</p><button class="button primary login-button" :disabled="busy"><Icon :name="busy ? 'LoaderCircle' : 'ArrowRight'" :class="{ spin: busy }" />{{ busy ? '请稍候…' : initialized ? '进入工作空间' : '创建并登录' }}</button></form>
+      <form @submit.prevent="submitLogin"><label v-if="!initialized" class="field"><span>首次设置密钥</span><input v-model="login.setupToken" aria-label="首次设置密钥" required type="password" autocomplete="off" placeholder="查看启动日志或 data/setup.key" /><small>仅首次初始化需要，用于确认您拥有这台服务器。</small></label><label class="field"><span>用户名</span><input v-model="login.username" autocomplete="username" required minlength="2" placeholder="请输入用户名" /></label><label class="field"><span>密码</span><input v-model="login.password" type="password" :autocomplete="initialized ? 'current-password' : 'new-password'" required :minlength="initialized ? 1 : 6" :placeholder="initialized ? '请输入密码' : '至少 6 个字符'" /></label><label v-if="initialized" class="login-remember"><input v-model="remember" type="checkbox" /><span>记住账号密码</span><small>仅保存在本机浏览器；共用电脑请勿勾选。</small></label><p v-if="error" class="inline-error" role="alert">{{ error }}</p><button class="button primary login-button" :disabled="busy"><Icon :name="busy ? 'LoaderCircle' : 'ArrowRight'" :class="{ spin: busy }" />{{ busy ? '请稍候…' : initialized ? '进入工作空间' : '创建并登录' }}</button></form>
       <div class="login-note"><Icon name="ShieldCheck" :size="15" />本地数据 · 自主掌控 · 轻量运行</div>
     </section><div class="login-footer">大白菜面板 v{{ version }} · 把时间留给更重要的事</div>
   </div>
@@ -114,6 +160,7 @@ onUnmounted(() => { window.removeEventListener('hashchange', onHash); window.rem
         <Scripts v-else-if="page === 'scripts'" />
         <Logs v-else-if="page === 'logs'" />
         <Resources v-else-if="['envs', 'subscriptions', 'dependencies'].includes(page)" :key="page" :kind="page" />
+        <ApiDocs v-else-if="page === 'api-docs'" @navigate="navigate" />
         <Settings v-else-if="page === 'settings'" :version="version" />
       </main><footer class="page-footer"><span>大白菜面板 <span class="footer-dot">·</span> 让自动化回归简单</span><span>Go + Vue · SQLite</span></footer>
     </div>

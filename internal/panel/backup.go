@@ -68,7 +68,6 @@ func (app *App) backupAPI(writer http.ResponseWriter, request *http.Request, pat
 			apiError(writer, err)
 			return
 		}
-		app.store.audit("backup.create", "admin", clientIP(request), false)
 		ok(writer, Object{"name": name})
 		return
 	}
@@ -109,7 +108,6 @@ func (app *App) backupAPI(writer http.ResponseWriter, request *http.Request, pat
 			return
 		}
 		app.engine.reschedule()
-		app.store.audit("backup.restore", "admin", clientIP(request), false)
 		ok(writer, Object{"safetyBackup": safety, "message": "恢复成功，请重新登录；依赖请在依赖管理中重新安装"})
 		return
 	}

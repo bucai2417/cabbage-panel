@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true"}
+var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true", "npmMirror": "", "pythonMirror": "", "linuxMirror": ""}
 
 func (app *App) settings() Object {
 	result := Object{}
@@ -51,6 +51,10 @@ func (app *App) saveSettings(body Object) error {
 		case "notifyFailures":
 			if text(value) != "true" && text(value) != "false" {
 				return errors.New("notifyFailures 只能为 true 或 false")
+			}
+		case "npmMirror", "pythonMirror", "linuxMirror":
+			if address := strings.TrimSpace(text(value)); address != "" && !validHTTP(address) {
+				return errors.New("镜像地址必须是无内嵌凭证的 HTTP(S) URL")
 			}
 		}
 	}
@@ -99,7 +103,10 @@ func (app *App) builtinConfigEntries() []Object {
 	result := []Object{}
 	for _, name := range []string{"system.json", "notifications.json"} {
 		content, _ := app.builtinContent(name)
-		result = append(result, Object{"name": name, "path": name, "title": name, "key": name, "isLeaf": true, "builtin": true, "size": len(content)})
+		result = append(result, Object{
+			"title": name, "value": name, "key": name, "type": "file", "parent": "", "size": len(content),
+			"name": name, "path": name, "isLeaf": true, "builtin": true,
+		})
 	}
 	return result
 }

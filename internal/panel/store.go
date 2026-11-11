@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -58,6 +59,10 @@ func openStore(root string) (*Store, error) {
 		"CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, command TEXT NOT NULL, status TEXT NOT NULL, started TEXT, finished TEXT, exit_code INTEGER, duration REAL NOT NULL DEFAULT 0, log_path TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);" +
 		"CREATE INDEX IF NOT EXISTS runs_task ON runs(kind, task_id, id DESC);" +
 		"CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, actor TEXT NOT NULL, created TEXT NOT NULL);" +
+		"CREATE TABLE IF NOT EXISTS login_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, address TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '', status INTEGER NOT NULL DEFAULT 0);" +
+		"CREATE TABLE IF NOT EXISTS notify_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '', status INTEGER NOT NULL DEFAULT 0, notify_type TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', script_name TEXT NOT NULL DEFAULT '');" +
+		"CREATE INDEX IF NOT EXISTS notify_logs_time ON notify_logs(timestamp DESC, id DESC);" +
+		"CREATE INDEX IF NOT EXISTS login_logs_time ON login_logs(timestamp DESC, id DESC);" +
 		"PRAGMA user_version=1;")
 	if err != nil {
 		db.Close()
@@ -67,6 +72,7 @@ func openStore(root string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	migrateLoginLogs(db)
 	success = true
 	return &Store{db: db, lock: lock}, nil
 }
@@ -112,6 +118,12 @@ func (store *Store) close() {
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// jsTimestamp 与青龙（稳定版）new Date().toString() 输出一致：
+// "Sun Oct 04 02:58:24 GMT+08:00 2026"。
+func jsTimestamp(value time.Time) string {
+	return value.In(time.Local).Format("Mon Jan 02 15:04:05 GMT-07:00 2006")
+}
 func randomToken() string {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
@@ -126,8 +138,30 @@ func text(value any) string {
 	return fmt.Sprint(value)
 }
 func integer(value any) int64 {
-	result, _ := strconv.ParseInt(strings.Split(text(value), ".")[0], 10, 64)
-	return result
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case json.Number:
+		if result, err := typed.Int64(); err == nil {
+			return result
+		}
+		if result, err := typed.Float64(); err == nil {
+			return int64(result)
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if result, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+			return result
+		}
+		if result, err := strconv.ParseFloat(trimmed, 64); err == nil {
+			return int64(result)
+		}
+	}
+	return 0
 }
 func boolean(value any) bool {
 	return value == true || value == float64(1) || value == 1 || value == int64(1)
@@ -157,7 +191,7 @@ func (store *Store) list(kind string) ([]Object, error) {
 			return nil, err
 		}
 		item["id"] = id
-		item["_id"] = id
+		item["_id"] = strconv.FormatInt(id, 10)
 		result = append(result, item)
 	}
 	return result, rows.Err()
@@ -174,7 +208,7 @@ func (store *Store) get(kind string, id int64) (Object, error) {
 		return nil, err
 	}
 	item["id"] = id
-	item["_id"] = id
+	item["_id"] = strconv.FormatInt(id, 10)
 	return item, nil
 }
 
@@ -198,7 +232,7 @@ func (store *Store) saveLocked(kind string, item Object) (Object, error) {
 	} else {
 		item = clone(item)
 		item["createdAt"] = now()
-		item["timestamp"] = time.Now().UnixMilli()
+		item["timestamp"] = jsTimestamp(time.Now())
 	}
 	item["updatedAt"] = now()
 	data, err := json.Marshal(item)
@@ -220,7 +254,7 @@ func (store *Store) saveLocked(kind string, item Object) (Object, error) {
 		}
 	}
 	item["id"] = id
-	item["_id"] = id
+	item["_id"] = strconv.FormatInt(id, 10)
 	return item, nil
 }
 
@@ -239,12 +273,79 @@ func (store *Store) setSetting(key, value string) error {
 	_, err := store.db.Exec("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value)
 	return err
 }
-func (store *Store) audit(action, actor, ip string, remote bool) {
-	flag := 0
-	if remote {
-		flag = 1
+
+// recordLogin 记录一次成功或失败的登录，字段形状对齐青龙 login-log。
+// 公网 IP 的归属地由 enrichLoginLogs 在查询时补全并回写。
+func (store *Store) recordLogin(ip, platform, address string, success bool) {
+	status := 0
+	if !success {
+		status = 1
 	}
-	_, _ = store.db.Exec("INSERT INTO audit(action,actor,created,ip,remote) VALUES(?,?,?,?,?)", action, actor, now(), ip, flag)
+	_, _ = store.db.Exec("INSERT INTO login_logs(timestamp,address,ip,platform,status) VALUES(?,?,?,?,?)", time.Now().UnixMilli(), address, ip, platform, status)
+}
+
+// loginLogs 返回最近的登录记录；与青龙一致，只保留 100 条。
+func (store *Store) loginLogs() ([]Object, error) {
+	_, _ = store.db.Exec("DELETE FROM login_logs WHERE id NOT IN (SELECT id FROM login_logs ORDER BY timestamp DESC, id DESC LIMIT 100)")
+	rows, err := store.db.Query("SELECT timestamp,address,ip,platform,status FROM login_logs ORDER BY timestamp DESC, id DESC LIMIT 100")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Object{}
+	for rows.Next() {
+		var timestamp, status int64
+		var address, ip, platform string
+		if rows.Scan(&timestamp, &address, &ip, &platform, &status) == nil {
+			result = append(result, Object{"timestamp": timestamp, "address": address, "ip": ip, "platform": platform, "status": status})
+		}
+	}
+	return result, rows.Err()
+}
+
+// loginAddress 不引入归属地库：本机与内网地址标注为内网IP，其余留空。
+func loginAddress(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ""
+	}
+	if parsed.IsLoopback() || parsed.IsPrivate() {
+		return "内网IP"
+	}
+	return ""
+}
+
+// migrateLoginLogs 把旧 audit 表中的登录记录迁移为青龙形状，只执行一次。
+func migrateLoginLogs(db *sql.DB) {
+	var marker string
+	if db.QueryRow("SELECT value FROM settings WHERE key='login_logs_migrated'").Scan(&marker) == nil && marker == "1" {
+		return
+	}
+	rows, err := db.Query("SELECT created,ip FROM audit WHERE action='login' ORDER BY id")
+	if err != nil {
+		return
+	}
+	type legacy struct {
+		stamp int64
+		ip    string
+	}
+	items := []legacy{}
+	for rows.Next() {
+		var created, ip string
+		if rows.Scan(&created, &ip) != nil {
+			continue
+		}
+		stamp := time.Now().UnixMilli()
+		if parsed, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			stamp = parsed.UnixMilli()
+		}
+		items = append(items, legacy{stamp: stamp, ip: ip})
+	}
+	_ = rows.Close()
+	for _, item := range items {
+		_, _ = db.Exec("INSERT INTO login_logs(timestamp,address,ip,platform,status) VALUES(?,?,?,?,?)", item.stamp, loginAddress(item.ip), item.ip, "", 0)
+	}
+	_, _ = db.Exec("INSERT INTO settings(key,value) VALUES('login_logs_migrated','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
 }
 
 func safePath(root, relative string) (string, error) {

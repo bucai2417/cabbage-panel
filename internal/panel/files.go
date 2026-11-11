@@ -1,6 +1,8 @@
 package panel
 
 import (
+	"archive/zip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -81,7 +83,100 @@ func (app *App) filesAPI(writer http.ResponseWriter, request *http.Request, kind
 	if kind == "configs" && app.builtinConfigAPI(writer, request, tail) {
 		return
 	}
+	// 青龙 GET /configs/samples：示例配置文件名列表。
+	if kind == "configs" && tail == "samples" && request.Method == "GET" {
+		ok(writer, []string{"config.sh", "extra.sh", "task_before.sh", "task_after.sh", "task_before.js", "task_before.py"})
+		return
+	}
 	if app.fileOperations(writer, request, kind, tail, root) {
+		return
+	}
+	if request.Method == "POST" && tail == "upload" {
+		// 本地文件上传：multipart 的 file 字段，可带 path 目标目录。
+		if err := request.ParseMultipartForm(32 << 20); err != nil {
+			fail(writer, 400, "请使用 multipart/form-data 上传文件")
+			return
+		}
+		file, header, err := request.FormFile("file")
+		if err != nil {
+			fail(writer, 400, "缺少 file 字段")
+			return
+		}
+		defer file.Close()
+		if header.Size > 32<<20 {
+			fail(writer, 400, "仅支持 32MB 以内的文件")
+			return
+		}
+		directory := strings.Trim(strings.TrimSpace(request.FormValue("path")), "/")
+		name := filepath.Base(header.Filename)
+		if name == "" || name == "." || name == ".." {
+			fail(writer, 400, "文件名无效")
+			return
+		}
+		relative := name
+		if directory != "" {
+			relative = directory + "/" + name
+		}
+		target, err := safePath(root, relative)
+		if err != nil {
+			apiError(writer, err)
+			return
+		}
+		if _, statErr := os.Lstat(target); statErr == nil {
+			fail(writer, 409, "文件已存在，不会覆盖")
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			apiError(writer, err)
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(file, 32<<20))
+		if err != nil {
+			apiError(writer, err)
+			return
+		}
+		if err := atomicWrite(target, data); err != nil {
+			apiError(writer, err)
+			return
+		}
+		ok(writer, Object{"path": relative, "size": len(data)})
+		return
+	}
+	if request.Method == "POST" && tail == "archive" {
+		// 批量下载：请求体为路径数组，打包成 ZIP 返回。
+		var paths []string
+		if err := decode(request, &paths); err != nil {
+			apiError(writer, err)
+			return
+		}
+		if len(paths) == 0 || len(paths) > 500 {
+			fail(writer, 400, "请选择 1–500 个文件")
+			return
+		}
+		writer.Header().Set("Content-Type", "application/zip")
+		writer.Header().Set("Content-Disposition", "attachment; filename="+kind+"-"+time.Now().Format("20060102-150405")+".zip")
+		archive := zip.NewWriter(writer)
+		defer archive.Close()
+		for _, relative := range paths {
+			source, err := safePath(root, relative)
+			if err != nil {
+				continue
+			}
+			info, err := os.Stat(source)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			entry, err := archive.Create(filepath.ToSlash(relative))
+			if err != nil {
+				continue
+			}
+			file, err := os.Open(source)
+			if err != nil {
+				continue
+			}
+			_, _ = io.Copy(entry, io.LimitReader(file, 64<<20))
+			file.Close()
+		}
 		return
 	}
 	if (tail == "" || tail == "files") && request.Method == "GET" {
@@ -111,7 +206,29 @@ func (app *App) filesAPI(writer http.ResponseWriter, request *http.Request, kind
 				return err
 			}
 			if strings.Contains(strings.ToLower(relative), strings.ToLower(request.URL.Query().Get("searchValue"))) {
-				result = append(result, Object{"name": entry.Name(), "title": filepath.ToSlash(relative), "key": filepath.ToSlash(relative), "path": filepath.ToSlash(relative), "isLeaf": true, "size": info.Size(), "updatedAt": info.ModTime().Format(time.RFC3339)})
+				slash := filepath.ToSlash(relative)
+				parentDir := filepath.ToSlash(filepath.Dir(relative))
+				if parentDir == "." {
+					parentDir = ""
+				}
+				// 超集字段：青龙的 title/key/type/parent/size/createTime + 面板的 name/path/isLeaf。
+				entry := Object{
+					"title":      entry.Name(),
+					"key":        slash,
+					"type":       "file",
+					"parent":     parentDir,
+					"size":       info.Size(),
+					"createTime": info.ModTime().UnixMilli(),
+					"name":       entry.Name(),
+					"path":       slash,
+					"isLeaf":     true,
+					"updatedAt":  info.ModTime().Format(time.RFC3339),
+				}
+				// 青龙 /configs/files 是下拉选项，需要 value 字段。
+				if kind == "configs" {
+					entry["value"] = slash
+				}
+				result = append(result, entry)
 			}
 			if len(result) > 10000 {
 				return errors.New("文件数量超过 10000")
@@ -288,7 +405,7 @@ func (app *App) filesAPI(writer http.ResponseWriter, request *http.Request, kind
 			apiError(writer, err)
 			return
 		}
-		result, err := app.engine.enqueueAdhoc("scripts", scriptRunTaskID(relative), "调试 · "+relative, "task "+shellQuote(filepath.ToSlash(target)), Object{"timeout": 0}, directory)
+		result, err := app.engine.enqueueInteractive("scripts", scriptRunTaskID(relative), "调试 · "+relative, "task "+shellQuote(filepath.ToSlash(target)), Object{"timeout": 0}, directory)
 		if err != nil {
 			_ = os.RemoveAll(directory)
 			apiError(writer, err)
@@ -394,27 +511,76 @@ func (app *App) latestLog(kind string, id int64) string {
 	content, _ := app.logTail(name)
 	return content
 }
-func (app *App) logTail(name string) (string, error) {
+
+// cronLogPayload 对齐青龙 GET /crons/:id/log：顶层返回日志内容与分块元数据。
+func (app *App) cronLogPayload(kind string, id, offset, limit int64, tail bool) Object {
+	var name, status string
+	notFound := Object{
+		"code": 200, "data": "日志不存在...", "logStatus": "notFound",
+		"offset": 0, "nextOffset": 0, "total": 0, "truncated": false,
+	}
+	if app.store.db.QueryRow("SELECT log_path,status FROM runs WHERE kind=? AND task_id=? ORDER BY id DESC LIMIT 1", kind, id).Scan(&name, &status) != nil || name == "" {
+		return notFound
+	}
+	content, start, next, total, truncated, err := app.logChunk(name, offset, limit, tail)
+	if err != nil {
+		return notFound
+	}
+	logStatus := status
+	if status == "running" || status == "queued" {
+		logStatus = "running"
+	}
+	return Object{
+		"code": 200, "data": content, "logStatus": logStatus,
+		"offset": start, "nextOffset": next, "total": total, "truncated": truncated,
+	}
+}
+
+// logChunk 按青龙 /logs/detail 语义分块读取：offset 起始字节、limit 字节数、tail 表示从末尾读。
+// 返回内容、实际起始偏移、下一次偏移、总字节数和是否被截断。
+func (app *App) logChunk(name string, offset, limit int64, tail bool) (string, int64, int64, int64, bool, error) {
 	path, err := safePath(filepath.Join(app.root, "logs"), name)
 	if err != nil {
-		return "", err
+		return "", 0, 0, 0, false, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", 0, 0, 0, false, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return "", err
+		return "", 0, 0, 0, false, err
 	}
-	prefix := ""
-	if info.Size() > 2<<20 {
-		_, _ = file.Seek(-(2 << 20), io.SeekEnd)
-		prefix = "[仅显示末尾 2MB 日志]\n"
+	total := info.Size()
+	const defaultLimit = int64(2 << 20)
+	if limit <= 0 || limit > defaultLimit {
+		limit = defaultLimit
 	}
-	bytes, err := io.ReadAll(io.LimitReader(file, 2<<20))
-	return prefix + strings.ToValidUTF8(string(bytes), "�"), err
+	start := offset
+	if start < 0 {
+		start = 0
+	}
+	if tail {
+		start = total - limit
+		if start < 0 {
+			start = 0
+		}
+	}
+	if start > total {
+		start = total
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return "", 0, 0, 0, false, err
+	}
+	bytes, err := io.ReadAll(io.LimitReader(file, limit))
+	next := start + int64(len(bytes))
+	return strings.ToValidUTF8(string(bytes), "�"), start, next, total, next < total, err
+}
+
+func (app *App) logTail(name string) (string, error) {
+	content, _, _, _, _, err := app.logChunk(name, 0, 0, true)
+	return content, err
 }
 
 func (app *App) logsAPI(writer http.ResponseWriter, request *http.Request, tail string) {
@@ -435,7 +601,12 @@ func (app *App) logsAPI(writer http.ResponseWriter, request *http.Request, tail 
 		http.ServeFile(writer, request, target)
 		return
 	}
+	// GET /api/logs 对齐青龙：返回日志目录树。面板自身的运行记录改由 /api/logs/runs 提供。
 	if tail == "" && request.Method == "GET" {
+		ok(writer, app.logTree())
+		return
+	}
+	if tail == "runs" && request.Method == "GET" {
 		limit := numberQuery(request, "limit", 200)
 		if limit > 1000 {
 			limit = 1000
@@ -449,9 +620,34 @@ func (app *App) logsAPI(writer http.ResponseWriter, request *http.Request, tail 
 		return
 	}
 	if tail == "" && request.Method == "DELETE" {
-		ids, err := parseIDs(request)
+		var body struct {
+			Filename string `json:"filename"`
+			Path     string `json:"path"`
+			Type     string `json:"type"`
+		}
+		// 青龙语义：按 filename + path 删除单个日志文件；兼容面板旧用法（ID 数组）。
+		raw, err := io.ReadAll(io.LimitReader(request.Body, 1<<20))
 		if err != nil {
 			apiError(writer, err)
+			return
+		}
+		if len(raw) > 0 && raw[0] == '{' && json.Unmarshal(raw, &body) == nil && body.Filename != "" {
+			relative := strings.Trim(strings.TrimPrefix(body.Path, "/")+"/"+body.Filename, "/")
+			if target, err := safePath(filepath.Join(app.root, "logs"), relative); err == nil {
+				_ = os.Remove(target)
+				ok(writer, nil)
+				return
+			}
+			fail(writer, 403, "暂无权限")
+			return
+		}
+		var ids []int64
+		if err := json.Unmarshal(raw, &ids); err != nil {
+			fail(writer, 400, "JSON 请求格式错误")
+			return
+		}
+		if len(ids) == 0 || len(ids) > 500 {
+			fail(writer, 400, "请选择 1–500 条记录")
 			return
 		}
 		for _, id := range ids {
@@ -468,6 +664,48 @@ func (app *App) logsAPI(writer http.ResponseWriter, request *http.Request, tail 
 				_ = os.Remove(path)
 			}
 			_, _ = app.store.db.Exec("DELETE FROM runs WHERE id=?", id)
+		}
+		ok(writer, nil)
+		return
+	}
+	// POST /api/logs/download 对齐青龙：按 filename + path 下载单个日志。
+	if tail == "download" && request.Method == "POST" {
+		var body struct {
+			Filename string `json:"filename"`
+			Path     string `json:"path"`
+		}
+		if err := decode(request, &body); err != nil {
+			apiError(writer, err)
+			return
+		}
+		relative := strings.Trim(strings.TrimPrefix(body.Path, "/")+"/"+body.Filename, "/")
+		target, err := safePath(filepath.Join(app.root, "logs"), relative)
+		if err != nil {
+			fail(writer, 403, "暂无权限")
+			return
+		}
+		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		writer.Header().Set("Content-Disposition", "attachment; filename="+body.Filename)
+		http.ServeFile(writer, request, target)
+		return
+	}
+	// POST /api/logs/input：向调试任务的 stdin 写入一行。
+	if tail == "input" && request.Method == "POST" {
+		var body struct {
+			ID    int64  `json:"id"`
+			Input string `json:"input"`
+		}
+		if err := decode(request, &body); err != nil {
+			apiError(writer, err)
+			return
+		}
+		if body.ID <= 0 {
+			fail(writer, 400, "缺少运行 ID")
+			return
+		}
+		if err := app.engine.writeStdin(body.ID, body.Input); err != nil {
+			apiError(writer, err)
+			return
 		}
 		ok(writer, nil)
 		return
@@ -539,10 +777,28 @@ func (app *App) logsAPI(writer http.ResponseWriter, request *http.Request, tail 
 			relative = strings.TrimPrefix(relative, "/")
 		}
 	}
-	content, err := app.logTail(relative)
+	// 目录树里的 key 是「任务名/文件名」，落盘路径只取最后一段。
+	if strings.Contains(relative, "/") {
+		relative = relative[strings.LastIndex(relative, "/")+1:]
+	}
+	query := request.URL.Query()
+	content, start, next, total, truncated, err := app.logChunk(
+		relative,
+		integer(query.Get("offset")),
+		integer(query.Get("limit")),
+		query.Get("tail") == "true" || query.Get("tail") == "1",
+	)
 	if err != nil {
 		apiError(writer, err)
 		return
 	}
-	ok(writer, content)
+	// 青龙 /logs/detail 在顶层返回分块元数据，content 放在 data。
+	respond(writer, 200, Object{
+		"code":       200,
+		"data":       content,
+		"offset":     start,
+		"nextOffset": next,
+		"total":      total,
+		"truncated":  truncated,
+	})
 }

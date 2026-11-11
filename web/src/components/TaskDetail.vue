@@ -22,7 +22,7 @@ const averageDuration = computed(() => {
   const total = finishedRuns.value.reduce((sum, run) => sum + Number(run.duration || 0), 0)
   return (total / finishedRuns.value.length).toFixed(2) + 's'
 })
-async function loadRuns() { runs.value = await api('/logs?kind=crons&taskId=' + props.task.id + '&limit=500'); loading.value = false }
+async function loadRuns() { runs.value = await api('/logs/runs?kind=crons&taskId=' + props.task.id + '&limit=500'); loading.value = false }
 usePolling(loadRuns, 6000)
 watch(() => props.task.status, (current, previous) => { if (current === 0 && previous !== 0) logKey.value++ })
 </script>

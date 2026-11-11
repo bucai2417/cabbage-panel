@@ -23,7 +23,7 @@ func tools() []Tool {
 	idsField := Object{"type": "array", "items": idField, "minItems": 1, "maxItems": 500}
 	return []Tool{
 		{"list_tasks", "列出定时任务及最近执行状态", "crons", "GET", "/crons", Object{"searchValue": stringField("按名称或命令搜索")}, []string{}, false},
-		{"create_task", "创建支持五段或六段 Cron 的任务；schedule 为空时仅手动执行", "crons", "POST", "/crons", Object{"name": stringField("名称"), "command": stringField("Shell 命令，如 task example.py"), "schedule": stringField("Cron 表达式"), "timeout": Object{"type": "integer", "minimum": 0}, "allowConcurrent": Object{"type": "boolean"}}, []string{"name", "command", "schedule"}, false},
+		{"create_task", "创建支持五段或六段 Cron 的任务；schedule 为空时仅手动执行。命令统一用 task 前缀，如 task example.py / task example.js / task example.ts", "crons", "POST", "/crons", Object{"name": stringField("名称"), "command": stringField("命令，统一用 task example.py 形式"), "schedule": stringField("Cron 表达式"), "timeout": Object{"type": "integer", "minimum": 0}, "allowConcurrent": Object{"type": "boolean"}}, []string{"name", "command", "schedule"}, false},
 		{"update_task", "修改已有定时任务", "crons", "PUT", "/crons", Object{"id": idField, "name": stringField("名称"), "command": stringField("命令"), "schedule": stringField("Cron 表达式"), "timeout": Object{"type": "integer", "minimum": 0}, "allowConcurrent": Object{"type": "boolean"}}, []string{"id"}, false},
 		{"run_tasks", "异步运行任务，返回 runId，可用 read_log 查询", "crons", "PUT", "/crons/run", Object{"ids": idsField}, []string{"ids"}, true},
 		{"stop_tasks", "停止任务及其子进程", "crons", "PUT", "/crons/stop", Object{"ids": idsField}, []string{"ids"}, true},
@@ -175,7 +175,6 @@ func (app *App) mcp(writer http.ResponseWriter, request *http.Request, principal
 		if selected.Method != "GET" {
 			app.writeMu.Lock()
 		}
-		app.store.audit("mcp "+name, principal, clientIP(request), false)
 		app.api(recorder, internal, internal.URL.Path, principal)
 		if selected.Method != "GET" {
 			app.writeMu.Unlock()

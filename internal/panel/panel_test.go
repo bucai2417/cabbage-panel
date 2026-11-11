@@ -109,6 +109,67 @@ func (panel *testPanel) finished(test *testing.T, id int64) Object {
 	return result
 }
 
+func TestQingLongRecordShapes(test *testing.T) {
+	panel := setupPanel(test)
+	panel.data(test, "POST", "/api/envs", []Object{{"name": "YPCK", "value": "666", "remarks": ""}})
+	panel.task(test, "联通", "task bucai/中国联通-v1.1.2.py", Object{"schedule": "1 0 * * *"})
+
+	envList := panel.data(test, "GET", "/api/envs", nil).([]any)
+	env := envList[0].(map[string]any)
+	// 青龙 Env 模型没有 _id，只有数字 id。
+	if _, ok := env["_id"]; ok {
+		test.Fatalf("env should not expose _id: %v", env)
+	}
+	if integer(env["id"]) == 0 || text(env["name"]) != "YPCK" || text(env["value"]) != "666" {
+		test.Fatalf("env identity mismatch: %v", env)
+	}
+	if _, ok := env["isDisabled"]; ok {
+		test.Fatal("env should not expose isDisabled")
+	}
+	for _, key := range []string{"timestamp", "status", "position", "remarks", "isPinned", "labels"} {
+		if _, ok := env[key]; !ok {
+			test.Fatalf("env missing %s: %v", key, env)
+		}
+	}
+	if _, err := time.Parse("Mon Jan 02 15:04:05 GMT-07:00 2006", text(env["timestamp"])); err != nil {
+		test.Fatalf("env timestamp %q: %v", text(env["timestamp"]), err)
+	}
+
+	// data 直接是任务数组，不再嵌套分页对象。
+	cronList := panel.data(test, "GET", "/api/crons", nil).([]any)
+	if len(cronList) != 1 {
+		test.Fatalf("cron list length mismatch: %v", cronList)
+	}
+	cron := cronList[0].(map[string]any)
+	// 青龙（稳定版）CronItem 含 _id（字符串）。
+	if text(cron["_id"]) != text(cron["id"]) || text(cron["name"]) != "联通" {
+		test.Fatalf("cron identity mismatch: %v", cron)
+	}
+	for _, key := range []string{"timestamp", "saved", "status", "isSystem", "pid", "isDisabled", "log_path", "isPinned", "labels", "last_running_time", "last_execution_time", "sub_id", "extra_schedules", "task_before", "task_after", "log_name", "allow_multiple_instances", "work_dir", "timeoutMs", "notifyOnFinish", "nextRunTime"} {
+		if _, ok := cron[key]; !ok {
+			test.Fatalf("cron missing %s: %v", key, cron)
+		}
+	}
+	if cron["saved"] != true || integer(cron["isSystem"]) != 0 || integer(cron["timeoutMs"]) != 0 || integer(cron["allow_multiple_instances"]) != 0 {
+		test.Fatalf("cron QingLong fields mismatch: %v", cron)
+	}
+	if cron["pid"] != nil || cron["sub_id"] != nil || cron["task_before"] != nil || cron["task_after"] != nil || cron["work_dir"] != nil {
+		test.Fatalf("cron null fields mismatch: %v", cron)
+	}
+	if integer(cron["nextRunTime"]) <= 0 {
+		test.Fatalf("cron nextRunTime missing: %v", cron)
+	}
+	if _, ok := cron["extra_schedules"].([]any); !ok {
+		test.Fatalf("cron extra_schedules should be an array: %v", cron)
+	}
+	if !strings.HasSuffix(text(cron["log_name"]), ".log") {
+		test.Fatalf("cron log_name should end with .log: %v", cron)
+	}
+	if _, err := time.Parse("Mon Jan 02 15:04:05 GMT-07:00 2006", text(cron["timestamp"])); err != nil {
+		test.Fatalf("cron timestamp %q: %v", text(cron["timestamp"]), err)
+	}
+}
+
 func TestAuthScopesAndMCP(test *testing.T) {
 	panel := setupPanel(test)
 	status, _ := panel.call(test, "GET", "/api/crons", nil, "")
@@ -264,9 +325,13 @@ func TestCronSchedulingAndDisable(test *testing.T) {
 	if before != after {
 		test.Fatal("disabled task still scheduled")
 	}
-	status, _ := panel.call(test, "POST", "/api/crons", Object{"name": "bad", "command": "echo x", "schedule": "not a cron"}, panel.token)
-	if status != 400 {
-		test.Fatal("invalid cron accepted")
+	// 无效 cron 允许保存（不自动调度），不再返回 400。
+	status, response := panel.call(test, "POST", "/api/crons", Object{"name": "bad", "command": "echo x", "schedule": "not a cron"}, panel.token)
+	if status != 200 {
+		test.Fatalf("invalid cron should be accepted for manual run: %v", response)
+	}
+	if boolean(response["data"].(map[string]any)["scheduleValid"]) {
+		test.Fatal("invalid cron should be flagged scheduleValid=false")
 	}
 }
 

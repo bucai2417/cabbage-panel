@@ -5,5 +5,6 @@ import './panels.css'
 import './responsive.css'
 import './workspace.css'
 import './ui.css'
+import './apidocs.css'
 
 createApp(App).mount('#app')

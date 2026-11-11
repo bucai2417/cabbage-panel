@@ -121,6 +121,7 @@ func (app *App) notificationsAPI(writer http.ResponseWriter, request *http.Reque
 		ok(writer, nil)
 	case "POST":
 		result := app.sendNotifications(request.Context(), "大白菜面板", "这是一条测试通知。中文编码正常。", app.notificationConfig())
+		app.recordNotifyLog("大白菜面板", "这是一条测试通知。中文编码正常。", result, "system", "")
 		ok(writer, result)
 	default:
 		fail(writer, 405, "方法不支持")
@@ -133,6 +134,7 @@ func (app *App) notify(ctx context.Context, title, message string) error {
 		return nil
 	}
 	results := app.sendNotifications(ctx, title, message, config)
+	app.recordNotifyLog(title, message, results, "system", "")
 	problems := []string{}
 	for _, result := range results {
 		if !boolean(result["success"]) {
@@ -143,6 +145,30 @@ func (app *App) notify(ctx context.Context, title, message string) error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// recordNotifyLog 记录一次通知发送结果，供「通知日志」页展示。
+// 有任一渠道成功即记为成功（status=0），全部失败记为失败（status=1）。
+func (app *App) recordNotifyLog(title, content string, results []Object, source, scriptName string) {
+	if len(results) == 0 {
+		return
+	}
+	status := 1
+	types := []string{}
+	for _, result := range results {
+		if boolean(result["success"]) {
+			status = 0
+		}
+		if kind := text(result["type"]); kind != "" {
+			types = append(types, kind)
+		}
+	}
+	_, _ = app.store.db.Exec(
+		"INSERT INTO notify_logs(timestamp,title,content,status,notify_type,source,script_name) VALUES(?,?,?,?,?,?,?)",
+		time.Now().UnixMilli(), title, content, status, strings.Join(types, ","), source, scriptName,
+	)
+	// 与登录日志一致，只保留最近 100 条。
+	_, _ = app.store.db.Exec("DELETE FROM notify_logs WHERE id NOT IN (SELECT id FROM notify_logs ORDER BY timestamp DESC, id DESC LIMIT 100)")
 }
 
 func (app *App) sendNotifications(ctx context.Context, title, message string, config NotificationConfig) []Object {
