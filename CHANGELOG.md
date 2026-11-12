@@ -1,7 +1,22 @@
 # 更新记录
 
-## 未发布
+## 1.0.0 · 2026-11-12
 
+- 接口文档页：按开放 / 内置 API 双分组列出全部接口，可填参数、发请求、查看响应、复制 cURL；补齐参数示例。
+- 对齐青龙接口形状：`GET /api/logs` 返回日志目录树、`/logs/detail` 分块读取、依赖 `log` 为字符串数组、登录 / 通知 / 系统三类日志。
+- 脚本管理支持本地上传、外链创建与批量打包下载（`POST /scripts/upload`、`/scripts/archive`）。
+- 调试支持标准输入交互：脚本执行到 `input()` / `readline()` 时面板显示输入框，提交后写入进程 stdin（`POST /logs/input`）。
+- `task` 统一命令入口，按后缀选择解释器，支持 TypeScript；新增 `now` / `conc`（并发按 `&` 拆分）/ `desi`（指定账号）子命令。
+- 任务支持 `work_dir`、`log_name`、`task_before` / `task_after`、`notifyOnFinish`；Cron 表达式不再强制校验，无效写法可保存并手动运行。
+- 依赖镜像源扩展为 npm / pip / apt / apk 三类，Linux 镜像通过临时 sources.list 生效。
+- 任务因缺少模块失败时自动识别 `ModuleNotFoundError` / `Cannot find module` 并安装依赖。
+- 可切换 Python 版本：设置中指定解释器路径或版本号，一键重建 venv 并重装依赖；Docker 支持 `--build-arg PYTHON_VERSION`。
+- 登录日志显示 IP 归属地（异步解析并缓存），新增 IP 黑名单；登录页支持记住账号密码。
+- 环境变量表头可点击排序，筛选下拉移至搜索框右侧；侧边栏调整顺序。
+- 通知按钮改为显示远端公告（后端多源并发拉取，失败静默跳过）。
+- 提示框改为顶部居中；任务详情日志移除多余标题，复制按钮悬浮右上角。
+- 优化停止响应与调试输入延迟（主进程同步 Kill + 异步清理进程树，输入后连续快速刷新）。
+- 密码长度下限调整为 6 字节。
 - 审计改为青龙兼容的登录日志：新增 `GET /api/user/login-log`，返回 timestamp/address/ip/platform/status，成功与失败登录都会记录，最多保留 100 条；移除 `GET /api/audit` 和日常写操作审计，旧登录记录自动迁移一次。设置页「操作审计」改为「登录日志」。
 - `GET /api/user` 响应补齐青龙字段 `avatar` 与 `twoFactorActivated`。
 - 任务与环境变量接口补齐青龙字段：`_id` 为字符串、`timestamp` 为 `Sun Oct 04 02:58:24 GMT+08:00 2026` 形式，任务新增 `saved`、`isSystem`、`pid`、`log_path`、`log_name`、`last_running_time`、`last_execution_time`、`sub_id`、`extra_schedules`、`task_before`、`task_after`、`allow_multiple_instances`、`work_dir`、`timeoutMs`、`notifyOnFinish`、`nextRunTime`，并接受同名字段创建/更新；环境变量不再输出 `isDisabled`。
@@ -28,18 +43,6 @@
 - 登录日志记录访问 IP 和登录设备，可在设置页「登录日志」查看成功与失败记录。
 - 统一危险/警告按钮、下拉框和滚动条样式，增加页面切换与仪表盘卡片微动效，补充手机端弹窗布局。
 
-## 1.1.0 · 2026-11-10
-
-- 配置页加入立即生效的系统参数、通知 JSON、全局 Shell 配置和任务前后置钩子。
-- 新增八类通知渠道、并发推送、签名、逐渠道测试，以及 Python / JavaScript / Shell 通知助手。
-- 脚本支持完整目录树、空目录、多选、新建目录、菜单、复制、移动、重命名及创建定时任务。
-- 文件移动与任务调度互斥，同步可识别任务命令及编辑历史；拒绝覆盖、目录自移与符号链接。
-- 接入按需加载的 CodeMirror 6：多行缩进、独立撤销/重做、补全、折叠、括号匹配、缩进辅助线、搜索替换、跳转行。
-- 点击任务名称进入全屏源码编辑器，可切换运行历史并下载完整日志。
-- 修复日志文本选中颜色；统一紧凑标题、表格、任务行与手机布局。
-- 环境变量、订阅、依赖、日志、开放应用和备份增加多选批量操作。
-- 默认更新仓库设为 bucai2417/cabbage-panel，版本与构建元数据同步至 1.1.0。
-
-## 1.0.0 · 2026-11-10
+## 0.1.0 · 2026-11-10
 
 首个可运行版本：Go / Vue / SQLite、同端口 HTTP / Open API / MCP、任务调度、三类脚本执行、依赖、订阅、备份恢复和签名更新。

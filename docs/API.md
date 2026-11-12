@@ -124,7 +124,8 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | GET / PUT /api/user | 账号查询 / 修改，修改需要 oldPassword |
 | GET /api/system/stats | 真实资源、统计和最近任务 |
 | GET /api/system/runtimes | Python/Node/Bash/Git/npm 检测 |
-| GET / PUT /api/system/settings | concurrency/timeout/retentionDays/githubRepo/webhookURL/notifyFailures/npmMirror/pythonMirror/linuxMirror |
+| GET / PUT /api/system/settings | concurrency/timeout/retentionDays/githubRepo/webhookURL/notifyFailures/npmMirror/pythonMirror/linuxMirror/pythonPath/pythonVersion |
+| POST /api/system/python/rebuild | 用当前配置的 Python 重建 venv 并重装 Python 依赖；有任务运行时返回 409 |
 | GET / PUT / DELETE /api/user/ip-blacklist | IP 黑名单：GET 列表、PUT {ip} 添加、DELETE {ip} 移除；命中后无法登录 |
 | PUT /api/system/cleanup | 清理过期日志 |
 | POST /api/system/notify | 测试已保存 Webhook |
@@ -173,6 +174,20 @@ GET /crons 默认把启用任务排在禁用任务前，组内置顶优先，其
 `data/scripts/notify.py` 与 `data/scripts/sendNotify.js` 随版本内置（首次启动写入，已存在不覆盖），签名与青龙一致：Python 用 `from notify import sendNotify`，Node 用 `require('./sendNotify')`。两者都通过面板注入的 `CABBAGE_NOTIFY_URL` / `CABBAGE_NOTIFY_TOKEN` 转发，通知渠道在「配置文件 → 通知配置」中设置，不读取青龙 config.sh。
 
 依赖安装镜像在「系统设置 → 常规设置 → 依赖安装镜像」配置：npm 通过 `--registry`，pip 通过 `-i` 生效；留空使用官方源。Linux 软件包镜像（`linuxMirror`）在 Linux 上生效：apt 会生成临时 sources.list 指向镜像（自动识别发行版代号），apk 通过 `--repository` 指定，不改动系统原有源配置。
+
+## Python 运行时
+
+**依赖不随程序打包**：二进制只嵌入前端，Python 依赖装在 `data/packages/venv`（独立 venv），Node 依赖装在 `data/packages/node_modules`，运行脚本需要宿主机提供 Python 与 Node。
+
+解释器解析优先级（`resolvePythonBase`）：
+
+1. `pythonPath` — 绝对路径，必须存在且是文件
+2. `pythonVersion` — 形如 `3.10`，按 `python3.10` → `python3` → `python` 顺序查找
+3. 自动检测 — `python3` → `python`
+
+已有 venv 时优先使用 venv 内的解释器。修改配置后必须调用 `POST /api/system/python/rebuild` 重建 venv 才生效；重建会先备份旧环境，失败自动回滚，成功后自动重装所有 `type=1` 的依赖。
+
+`GET /api/system/runtimes` 的 Python 项额外返回：`version`（如 `3.10.9`）、`source`（`system` / `configured-path` / `configured-version` / `configured-fallback`）、`configuredPath`、`configuredVersion`。配置项无效时 `source` 为 `configured-fallback`，表示已回退到系统默认。
 
 ## 依赖缺失自动安装
 

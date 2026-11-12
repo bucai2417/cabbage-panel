@@ -445,6 +445,59 @@ func findPython() string {
 	}
 	return "python3"
 }
+
+// venvPython 返回 packages/venv 内的解释器路径；不存在时返回空串。
+func (app *App) venvPython() string {
+	bin := "bin/python"
+	if runtime.GOOS == "windows" {
+		bin = "Scripts/python.exe"
+	}
+	path := filepath.Join(app.root, "packages", "venv", filepath.FromSlash(bin))
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	return ""
+}
+
+func (app *App) hasVenv() bool { return app.venvPython() != "" }
+
+// resolvePythonBase 找到「基础 Python」：配置路径 > 配置版本号 > 自动检测。
+// 配置项无效时静默回退，避免一个坏配置让所有脚本都跑不起来。
+func (app *App) resolvePythonBase() string {
+	if path := strings.TrimSpace(app.store.setting("pythonPath", "")); path != "" {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path
+		}
+	}
+	if version := strings.TrimSpace(app.store.setting("pythonVersion", "")); version != "" {
+		// 先找带版本的命令（python3.11），再回落到通用名。
+		for _, name := range []string{"python" + version, "python3", "python"} {
+			if found, err := exec.LookPath(name); err == nil {
+				return found
+			}
+		}
+	}
+	return findPython()
+}
+
+// pythonSource 说明当前基础 Python 的来源，供运行环境展示。
+// 配置了版本号时，以实际解析出的解释器版本是否匹配为准（Windows 常只有 python.exe）。
+func (app *App) pythonSource(ctx context.Context) string {
+	if path := strings.TrimSpace(app.store.setting("pythonPath", "")); path != "" {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return "configured-path"
+		}
+		return "configured-fallback"
+	}
+	if version := strings.TrimSpace(app.store.setting("pythonVersion", "")); version != "" {
+		actual := pythonVersion(ctx, app.resolvePythonBase())
+		if strings.HasPrefix(actual, version+".") || actual == version {
+			return "configured-version"
+		}
+		return "configured-fallback"
+	}
+	return "system"
+}
 func findShell() string {
 	if runtime.GOOS == "windows" {
 		for _, location := range []string{os.Getenv("CABBAGE_BASH"), "C:/Program Files/Git/bin/bash.exe", "D:/Git/bin/bash.exe"} {
@@ -495,9 +548,16 @@ func (app *App) environment() []string {
 	app.helperMu.RUnlock()
 	values["CABBAGE_NOTIFY_TOKEN"] = app.helperKey
 	values["PATH"] = filepath.Join(app.root, "bin") + string(os.PathListSeparator) + values["PATH"]
-	values["CABBAGE_PYTHON"] = filepath.ToSlash(app.python())
-	if app.python() != findPython() {
-		values["PATH"] = filepath.Dir(app.python()) + string(os.PathListSeparator) + values["PATH"]
+	// 一次求值，避免重复 LookPath；venv 优先，其次配置的基础 Python。
+	base := app.resolvePythonBase()
+	current := base
+	if venv := app.venvPython(); venv != "" {
+		current = venv
+		values["PATH"] = filepath.Dir(venv) + string(os.PathListSeparator) + values["PATH"]
+	}
+	values["CABBAGE_PYTHON"] = filepath.ToSlash(current)
+	if base != findPython() {
+		values["PATH"] = filepath.Dir(base) + string(os.PathListSeparator) + values["PATH"]
 	}
 	values["GIT_TERMINAL_PROMPT"] = "0"
 	result := []string{}

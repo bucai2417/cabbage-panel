@@ -107,4 +107,4 @@ JavaScript（CommonJS）：
 
 ## 版本与发布
 
-当前版本 v1.1.0，默认仓库 bucai2417/cabbage-panel。此次仅生成本地代码与发行包，没有创建 Git 提交、推送、GitHub Release 或线上部署。真实在线更新仍要求 Release 签名公钥和签名清单，参见 RELEASE.md。
+当前版本 v1.0.0，默认仓库 bucai2417/cabbage-panel。此次仅生成本地代码与发行包，没有创建 Git 提交、推送、GitHub Release 或线上部署。真实在线更新仍要求 Release 签名公钥和签名清单，参见 RELEASE.md。

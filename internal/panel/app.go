@@ -89,6 +89,8 @@ func New(root, version, commit, updateKey string) (*App, error) {
 		store.close()
 		return nil, err
 	}
+	// 清扫上次重建 Python 环境时遗留的 venv.bak-* 目录。
+	app.cleanupPythonBackups()
 	app.engine.start()
 	return app, nil
 }
@@ -306,6 +308,11 @@ func (app *App) Handler() http.Handler {
 			}
 			if strings.HasPrefix(apiPath, "/backups") {
 				app.backupAPI(writer, request, apiPath, principal)
+				return
+			}
+			// 重建 Python 环境需要独占 gate 写锁，必须在读锁之前处理。
+			if apiPath == "/system/python/rebuild" {
+				app.pythonRebuildAPI(writer, request)
 				return
 			}
 			app.gate.RLock()

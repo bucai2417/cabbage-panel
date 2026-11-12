@@ -2,26 +2,30 @@
 
 轻量、自托管的自动化任务面板。Go 后端、Vue 3 前端、SQLite 数据库，前端静态资源嵌入单个程序。默认端口 **5700**，网页、管理 API、开放 API 和 MCP 共用同一端口。
 
-当前版本：**1.1.0**。
+当前版本：**1.0.0**。
 
 文档入口：[使用指南](docs/WORKSPACE.md) · [构建与打包](docs/BUILD.md) · [开发 / Agent 接手](docs/DEVELOPMENT.md) · [发布与在线更新](docs/RELEASE.md)。其他 Agent 请打开源码根目录，从 [AGENTS.md](AGENTS.md) 开始；发行 ZIP 用于运行，不包含开发源码。
 
 ## 功能
 
-- 定时任务：五段 / 六段 Cron、@every、手动执行、启停、批量操作、标签、置顶、搜索和分页；启用任务在上、禁用任务单独排下方，新建任务优先展示。
+- 定时任务：五段 / 六段 Cron、@every、手动执行、启停、批量操作、标签、置顶、搜索和分页；启用任务在上、禁用任务单独排下方，新建任务优先展示。Cron 表达式不强制校验，无效写法仍可保存并手动运行。
+- 任务执行：支持工作目录、自定义日志名、任务级前后置脚本、执行结束通知；`task` 统一命令入口，支持 `now` / `conc`（并发按账号拆分）/ `desi`（指定账号）子命令。
 - 异步执行：最多 32 个并发任务、256 个在途任务上限；默认避免同任务重叠，可独立开启；支持超时、停止和子进程清理。
-- 脚本：Python、JavaScript、Shell；完整文件夹树、新建文件夹、行菜单、多选、移动/复制/重命名、直接运行和全屏调试工作区。直接运行使用独立运行记录，不会创建定时任务；运行中可停止。
-- 编辑器：CodeMirror 6，语法高亮、代码折叠、括号匹配、缩进辅助线、自动补全、撤销/重做、面板内查找替换（大小写、整词、正则、全部替换）、跳转行、自动换行和保存历史。调试工作区左侧编辑、右侧日志，修改无需保存即可运行，错误会在对应行显示红色诊断，并可在弹窗中管理环境变量。
+- 脚本：Python、JavaScript、TypeScript、Shell；完整文件夹树、新建文件夹、行菜单、多选、移动/复制/重命名、直接运行和全屏调试工作区。支持从本地上传、从外链创建、批量打包下载。直接运行使用独立运行记录，不会创建定时任务；运行中可停止。
+- 编辑器：CodeMirror 6，语法高亮、代码折叠、括号匹配、缩进辅助线、自动补全、撤销/重做、面板内查找替换（大小写、整词、正则、全部替换）、跳转行、自动换行和保存历史。调试工作区左侧编辑、右侧日志，修改无需保存即可运行，错误会在对应行显示红色诊断，并可在弹窗中管理环境变量；支持 `input()` 等交互式输入。
 - 内置配置：system.json、notifications.json、config.sh、任务前后置钩子；设置页面与脚本管理的配置文件页共用 SQLite 中的真实设置。
 - 日志：按任务名称两级展示，运行记录与日志在同页查看；支持历史运行切换、内容筛选、完整日志下载、批量删除、退出码、耗时、实时读取、SSE 流、保留周期和自动清理；单次输出上限 20MB。
-- 环境变量：增删改查、排序、启停、备注、标签、置顶和状态筛选；默认显示变量值，列表展示 ID 标识和最后修改时间，新建变量排在末尾，运行时注入进程。
+- 环境变量：增删改查、排序、启停、备注、标签、置顶和状态筛选；表头可点击排序，默认显示变量值，列表展示 ID 标识和最后修改时间，新建变量排在末尾，运行时注入进程。
 - 订阅：HTTP(S) Git 仓库 / 单文件、分支、Cron 同步、正则白黑名单、自动识别 cron: 注释并创建任务。
-- 依赖：Node.js npm、Python 独立 venv、Linux apt/apk；后台安装、卸载、重装和日志。
+- 依赖：Node.js npm、Python 独立 venv、Linux apt/apk；后台安装、卸载、重装和日志；可配置 npm / pip / apt / apk 镜像源；任务因缺少模块失败时自动识别并安装依赖。
+- Python 运行时：可在设置中指定解释器路径或版本号（如 3.11），一键重建 venv 并自动重装依赖；Docker 构建时可用 `--build-arg PYTHON_VERSION` 选择版本。
 - 监控：真实 CPU、内存、磁盘、面板堆内存、执行统计和最近运行任务。
-- 账户与应用：首次设置密钥、bcrypt、HttpOnly Cookie、应用权限与应用有效期、可在列表中直接查看的 Client Secret、可设置有效期或永久并持久登记的 Authorization（与 Client ID 用途分离）、与青龙 `login-log` 形状一致的登录日志（成功/失败、IP、设备，最多 100 条）；MCP 配置只使用 Authorization。
-- 通知：企业微信、钉钉、飞书、Bark、Telegram、PushPlus、Server酱 SCT、通用 Webhook；支持多渠道并发、签名、逐渠道测试、失败/超时通知，以及 Python/JS/Shell 通知助手。
+- 账户与应用：首次设置密钥、bcrypt、HttpOnly Cookie、记住账号密码、应用权限与应用有效期、可在列表中直接查看的 Client Secret、可设置有效期或永久并持久登记的 Authorization（与 Client ID 用途分离）、与青龙 `login-log` 形状一致的登录日志（成功/失败、IP、IP 归属地、设备，最多 100 条）、IP 黑名单；MCP 配置只使用 Authorization。
+- 通知：企业微信、钉钉、飞书、Bark、Telegram、PushPlus、Server酱 SCT、通用 Webhook；支持多渠道并发、签名、逐渠道测试、失败/超时通知，以及 Python/JS/Shell 通知助手；通知发送日志可在面板查看。
 - 备份：ZIP 导出 / 导入，恢复前自动备份，数据库事务和文件目录回滚；拒绝路径穿越与符号链接。
 - MCP：POST /mcp，无状态 Streamable HTTP，18 个工具，复用应用和资源权限。
+- 接口文档：内置交互式文档页，按开放 / 内置 API 分组，可直接填参数、发请求、查看响应并复制 cURL。
+- 日志页：登录日志、通知日志、系统日志三类，均可在面板查看和清理。
 - 更新：GitHub Release 下载、Ed25519 签名和 SHA-256 校验、程序替换、旧版本保留。
 
 页面与配置操作说明见 [使用指南](docs/WORKSPACE.md)。默认更新仓库为 `bucai2417/cabbage-panel`，本地构建不自动发布任何内容。
@@ -39,7 +43,7 @@ Linux / macOS 安装 Python 3（含 venv）、Node.js、Bash 和 Git，将对应
     chmod +x cabbage
     ./cabbage --data ./data --addr :5700
 
-访问 http://localhost:5700。首次启动生成 data/setup.key 并在控制台显示设置密钥，输入密钥创建管理员。密码至少 12 字节，无默认账号密码；初始化后删除设置密钥文件。
+访问 http://localhost:5700。首次启动生成 data/setup.key 并在控制台显示设置密钥，输入密钥创建管理员。用户名 2–64 字节，密码 6–72 字节，无默认账号密码；初始化后删除设置密钥文件。
 
 --version 输出版本。--addr 127.0.0.1:5700 限制本机访问。公网部署使用 HTTPS 反向代理，保留原始 Host，API 和 /mcp 不缓存。
 
@@ -49,6 +53,14 @@ Linux / macOS 安装 Python 3（含 venv）、Node.js、Bash 和 Git，将对应
     docker compose logs cabbage
 
 镜像包含 Python、Node.js、Bash、Git、pip、npm；数据使用命名卷，默认使用非 root 用户。Python / Node 依赖可在面板安装。系统包在自定义 Dockerfile 预装；默认容器和 systemd 服务不提权安装系统包。
+
+镜像默认 Python 3.10，可在构建时切换版本：
+
+    docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.0 .
+    # 或
+    PYTHON_VERSION=3.12 docker compose build
+
+原生部署可在面板「系统设置 → 运行环境」指定 Python 路径或版本，点「重建 Python 环境」生效。依赖不随二进制打包，Python 依赖在 `data/packages/venv`，Node 依赖在 `data/packages/node_modules`。
 
 容器通过更新镜像并重新创建容器升级。面板内程序替换用于原生发行包。不要挂载 Docker socket。
 
@@ -78,7 +90,9 @@ Linux / macOS：
     print("你好，大白菜！")
     print(os.environ.get("MY_SETTING", "未配置"))
 
-任务命令填 task hello.py，每日 08:00 执行填 0 8 * * *。也可使用 node hello.js、bash hello.sh、python hello.py。工作目录是数据目录中的 scripts。
+任务命令填 `task hello.py`，每日 08:00 执行填 `0 8 * * *`。统一用 `task` 前缀，按后缀自动选择解释器：`task a.py` / `task a.js` / `task a.ts` / `task a.sh`。也支持任意 Shell 命令。工作目录是数据目录中的 scripts。
+
+需要按账号并发时用 `task a.js conc COOKIE`（把变量按 `&` 拆分逐个并发），或 `task a.js desi COOKIE 1 3`（只跑第 1、3 个账号）。
 
 HTTP 请求立即返回 runId，后台队列执行，结果从日志查询。非零退出码标记 failed，超时标记 timeout，停止标记 cancelled，重启前未完成的执行标记 interrupted，不自动重放。
 

@@ -14,6 +14,23 @@ import Settings from './pages/Settings.vue'
 
 const ready = ref(false), loggedIn = ref(false), initialized = ref(true), busy = ref(false), error = ref('')
 const user = ref(''), version = ref('1.1.0'), menuOpen = ref(false), globalSearch = ref('')
+// 公告弹层：异步加载，失败静默跳过，不影响主界面。
+const noticeOpen = ref(false), noticeText = ref(''), noticeLoading = ref(false), noticeLoaded = ref(false)
+async function openNotice() {
+  noticeOpen.value = true
+  if (noticeLoaded.value || noticeLoading.value) return
+  noticeLoading.value = true
+  try {
+    const result = await api('/system/notice')
+    noticeText.value = (result && result.text) || ''
+    noticeLoaded.value = true
+  } catch {
+    // 网络不可达时保持空文本，不弹出错误提示。
+    noticeText.value = ''
+  } finally {
+    noticeLoading.value = false
+  }
+}
 const login = ref({ username: '', password: '', setupToken: '' })
 const remember = ref(false)
 const rememberKey = 'cabbage-remember-login'
@@ -153,7 +170,7 @@ onUnmounted(() => { window.removeEventListener('hashchange', onHash); window.rem
       <div class="nav-caption">工作空间</div><nav aria-label="主导航"><button v-for="item in navigation" :key="item.id" :class="{ active: page === item.id }" :aria-current="page === item.id ? 'page' : undefined" @click="navigate(item.id)"><Icon :name="item.icon" /><span>{{ item.label }}</span><span v-if="page === item.id" class="nav-dot" /></button></nav>
       <div class="sidebar-bottom"><div class="sidebar-status"><span class="live-dot" /><div><strong>服务已连接</strong><small>v{{ version }} · 本地数据</small></div></div></div>
     </aside>
-    <div class="main-shell"><header class="topbar"><button class="icon-button mobile-menu" aria-label="打开导航" @click="menuOpen = !menuOpen"><Icon name="Menu" /></button><form class="global-search" @submit.prevent="navigate('tasks')"><Icon name="Search" /><input id="global-search" v-model="globalSearch" placeholder="搜索任务、命令、关键词…" aria-label="搜索任务" /><kbd>Ctrl K</kbd></form><div class="topbar-right"><span class="topbar-date">{{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }) }}</span><button class="icon-button" title="查看执行日志" aria-label="查看执行日志" @click="navigate('logs')"><Icon name="Bell" /></button><div class="user-avatar">{{ user.slice(0, 1).toUpperCase() }}</div><span class="user-name">{{ user }}</span><button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><Icon name="LogOut" :size="17" /></button></div></header>
+    <div class="main-shell"><header class="topbar"><button class="icon-button mobile-menu" aria-label="打开导航" @click="menuOpen = !menuOpen"><Icon name="Menu" /></button><form class="global-search" @submit.prevent="navigate('tasks')"><Icon name="Search" /><input id="global-search" v-model="globalSearch" placeholder="搜索任务、命令、关键词…" aria-label="搜索任务" /><kbd>Ctrl K</kbd></form><div class="topbar-right"><span class="topbar-date">{{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }) }}</span><button class="icon-button" title="查看通知" aria-label="查看通知" @click="openNotice"><Icon name="Bell" /></button><div class="user-avatar">{{ user.slice(0, 1).toUpperCase() }}</div><span class="user-name">{{ user }}</span><button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><Icon name="LogOut" :size="17" /></button></div></header>
       <main>
         <Dashboard v-if="page === 'dashboard'" @navigate="navigate" />
         <Tasks v-else-if="page === 'tasks'" :global-search="globalSearch" />
@@ -165,6 +182,7 @@ onUnmounted(() => { window.removeEventListener('hashchange', onHash); window.rem
       </main><footer class="page-footer"><span>大白菜面板 <span class="footer-dot">·</span> 让自动化回归简单</span><span>Go + Vue · SQLite</span></footer>
     </div>
   </div>
+  <div v-if="noticeOpen" class="overlay notice-overlay" @mousedown.self="noticeOpen = false"><section class="modal notice-modal" role="dialog" aria-modal="true" aria-labelledby="notice-title"><header><div><span class="eyebrow">NOTICE</span><h2 id="notice-title">通知</h2></div><button class="icon-button" aria-label="关闭通知" @click="noticeOpen = false"><Icon name="X" /></button></header><div class="notice-body"><p v-if="noticeLoading" class="muted">正在获取通知…</p><p v-else-if="noticeText" class="notice-text">{{ noticeText }}</p><p v-else class="muted">暂无通知内容。</p></div><footer><a class="small-button" href="https://github.com/bucai2417/cabbage-panel" target="_blank" rel="noopener noreferrer"><Icon name="GitBranch" :size="15" />项目主页</a><button class="button" @click="noticeOpen = false">关闭</button></footer></section></div>
   <div class="toast-stack" aria-live="polite"><div v-for="notice in notices" :key="notice.id" class="toast" :class="notice.type"><Icon :name="notice.type === 'error' ? 'CircleAlert' : 'CircleCheck'" /><span>{{ notice.message }}</span><button class="icon-button" aria-label="关闭提示" @click="notices = notices.filter(item => item.id !== notice.id)"><Icon name="X" :size="14" /></button></div></div>
   <ConfirmDialog />
 </template>

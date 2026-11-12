@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true", "npmMirror": "", "pythonMirror": "", "linuxMirror": ""}
+var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true", "npmMirror": "", "pythonMirror": "", "linuxMirror": "", "pythonPath": "", "pythonVersion": ""}
 
 func (app *App) settings() Object {
 	result := Object{}
@@ -55,6 +55,19 @@ func (app *App) saveSettings(body Object) error {
 		case "npmMirror", "pythonMirror", "linuxMirror":
 			if address := strings.TrimSpace(text(value)); address != "" && !validHTTP(address) {
 				return errors.New("镜像地址必须是无内嵌凭证的 HTTP(S) URL")
+			}
+		case "pythonPath":
+			// 留空表示自动检测；非空必须是存在的文件。
+			if path := strings.TrimSpace(text(value)); path != "" {
+				info, err := os.Stat(path)
+				if err != nil || info.IsDir() {
+					return errors.New("Python 路径不存在或不是可执行文件")
+				}
+			}
+		case "pythonVersion":
+			// 形如 3.10、3.12；留空表示不指定。
+			if version := strings.TrimSpace(text(value)); version != "" && !regexp.MustCompile(`^\d+\.\d{1,2}$`).MatchString(version) {
+				return errors.New("Python 版本格式应为 3.10 这样的「主.次」")
 			}
 		}
 	}

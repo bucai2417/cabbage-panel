@@ -1,6 +1,6 @@
 # 本地构建与打包
 
-本文对应 v1.1.0，适用于从源码构建和生成本地发行包。签名与 GitHub Release 发布见 [RELEASE.md](RELEASE.md)，开发接手见 [DEVELOPMENT.md](DEVELOPMENT.md)。以下构建与打包命令不会发布到 GitHub。
+本文对应 v1.0.0，适用于从源码构建和生成本地发行包。签名与 GitHub Release 发布见 [RELEASE.md](RELEASE.md)，开发接手见 [DEVELOPMENT.md](DEVELOPMENT.md)。以下构建与打包命令不会发布到 GitHub。
 
 ## 环境准备
 
@@ -13,7 +13,25 @@
 
 所有命令在源码根目录执行。Go 依赖由 go.mod/go.sum 锁定，前端依赖由 web/package-lock.json 锁定。不要用手工复制的 node_modules 代替 npm ci。
 
-运行发行程序不需要 Go。Python、Node.js、Bash 和 Git 不包含在原生 ZIP 中，运行相应脚本或同步 Git 订阅时需自行安装。Dockerfile 包含这些运行工具，当前本机尚未实际验证 Docker 构建。
+运行发行程序不需要 Go。Python、Node.js、Bash 和 Git 不包含在原生 ZIP 中，运行相应脚本或同步 Git 订阅时需自行安装。Dockerfile 包含这些运行工具。
+
+### Docker 与 Python 版本
+
+运行时镜像基于官方 `python:${PYTHON_VERSION}-slim-bookworm`，Node 从 `node:24-bookworm-slim` 复制进来（同为 bookworm，glibc 一致）。默认 Python 3.10，构建时可切换：
+
+```
+docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.0 .
+```
+
+compose 通过环境变量覆盖：
+
+```
+PYTHON_VERSION=3.12 docker compose build
+```
+
+说明：Debian bookworm 官方源只有 Python 3.11，因此运行时基底改为官方 python 镜像而非在 node 镜像里 apt 安装。镜像会略大一些，换来 3.10 / 3.11 / 3.12 一行参数切换。
+
+原生部署（非 Docker）可在面板「系统设置 → 常规设置 → 运行环境」指定 Python 解释器路径或版本号，切换后点「重建 Python 环境」。
 
 ## Windows 构建
 
@@ -74,12 +92,12 @@ node scripts/package.mjs
 
 打包需要 Windows 的 python 或其他平台的 python3 命令可用。脚本只读取 dist/ 中名称匹配的平台程序，不会编译，也不会检查程序内部版本。不能只修改 VERSION 后把旧程序重新打包；不打算发布的旧平台程序应移到 dist/ 以外的归档目录。
 
-| 平台 | 程序 | v1.1.0 发行包 |
+| 平台 | 程序 | v1.0.0 发行包 |
 | --- | --- | --- |
-| Windows x64 | cabbage-windows-amd64.exe | cabbage-windows-amd64-v1.1.0.zip |
-| Linux x64 | cabbage-linux-amd64 | cabbage-linux-amd64-v1.1.0.zip |
-| Linux ARM64 | cabbage-linux-arm64 | cabbage-linux-arm64-v1.1.0.zip |
-| macOS Apple Silicon | cabbage-darwin-arm64 | cabbage-darwin-arm64-v1.1.0.zip |
+| Windows x64 | cabbage-windows-amd64.exe | cabbage-windows-amd64-v1.0.0.zip |
+| Linux x64 | cabbage-linux-amd64 | cabbage-linux-amd64-v1.0.0.zip |
+| Linux ARM64 | cabbage-linux-arm64 | cabbage-linux-arm64-v1.0.0.zip |
+| macOS Apple Silicon | cabbage-darwin-arm64 | cabbage-darwin-arm64-v1.0.0.zip |
 
 全部输出在 dist/。重复打包会覆盖相同版本的 ZIP 和 SHA256SUMS，不会改写程序或运行数据；已对外发布的版本不要覆盖，应递增版本号。
 
@@ -110,7 +128,7 @@ chmod +x ./cabbage-linux-amd64
 
 ## 签名更新与交付
 
-本地 ZIP 可手工部署。在线更新还要求正式程序内嵌 CABBAGE_UPDATE_PUBLIC_KEY，Release 提供由匹配私钥签名的 manifest.json、manifest.sig 及对应平台程序；仅生成 ZIP 不满足在线更新要求。当前本地 v1.1.0 程序未注入正式发布公钥。
+本地 ZIP 可手工部署。在线更新还要求正式程序内嵌 CABBAGE_UPDATE_PUBLIC_KEY，Release 提供由匹配私钥签名的 manifest.json、manifest.sig 及对应平台程序；仅生成 ZIP 不满足在线更新要求。当前本地 v1.0.0 程序未注入正式发布公钥。
 
 正式签名身份由项目所有者保管，操作步骤见 [RELEASE.md](RELEASE.md)。当前未授权对外发布，不要推送 tag 来触发发布工作流。
 

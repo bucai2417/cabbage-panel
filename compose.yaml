@@ -1,7 +1,11 @@
 services:
   cabbage:
-    build: .
-    image: cabbage-panel:1.1.0
+    build:
+      context: .
+      args:
+        # 可用环境变量覆盖：PYTHON_VERSION=3.11 docker compose build
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.10}
+    image: cabbage-panel:1.0.0
     container_name: cabbage-panel
     ports:
       - "5700:5700"

@@ -21,7 +21,7 @@ GitHub Settings → Secrets and variables → Actions：
 
 1. 同步 VERSION、cmd/cabbage/main.go 默认 version、web/package.json、web/package-lock.json、compose.yaml、Dockerfile 默认版本、CHANGELOG.md 和文档版本。
 2. 通过 CI 并审查变更。
-3. 推送与 VERSION 对应的 tag，例如 v1.1.0。
+3. 推送与 VERSION 对应的 tag，例如 v1.0.0。
 4. Workflow 构建 Linux amd64/arm64、Windows amd64、macOS arm64。
 5. 生成含使用文档的 ZIP 包，发布程序、ZIP、manifest.json、manifest.sig、SHA256SUMS。
 

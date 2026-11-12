@@ -12,7 +12,7 @@ import (
 	"github.com/bucai2417/cabbage-panel/internal/panel"
 )
 
-var version = "1.1.0"
+var version = "1.0.0"
 var commit = "dev"
 var updateKey = ""
 

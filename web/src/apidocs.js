@@ -23,7 +23,7 @@ export const apiGroups = [
       {
         id: 'system-init', method: 'GET', path: '/system/init', noAuth: true, tabs: apiOnly,
         summary: '初始化状态与版本', description: '公开接口，用于登录页判断是否已完成首次初始化。',
-        response: { code: 200, data: { isInitialized: true, version: '1.1.0' } },
+        response: { code: 200, data: { isInitialized: true, version: '1.0.0' } },
       },
       {
         id: 'user-init', method: 'POST', path: '/user/init', noAuth: true, tabs: apiOnly,
@@ -66,7 +66,7 @@ export const apiGroups = [
       {
         id: 'system-log', method: 'GET', path: '/system/log', tabs: apiOnly,
         summary: '系统日志', description: '返回系统运行日志纯文本（末尾最多 2MB）；DELETE 清空。记录启动、任务执行与异常事件。',
-        response: { code: 200, data: '[info 2026-11-11 20:27:33]:\t[boot] 大白菜面板 v1.1.0 已启动' },
+        response: { code: 200, data: '[info 2026-11-11 20:27:33]:\t[boot] 大白菜面板 v1.0.0 已启动' },
       },
       {
         id: 'user-ip-blacklist', method: 'GET', path: '/user/ip-blacklist', tabs: apiOnly,
@@ -672,12 +672,17 @@ export const apiGroups = [
       {
         id: 'system-stats', method: 'GET', path: '/system/stats', tabs: apiOnly,
         summary: '资源与执行统计', description: '真实 CPU、内存、磁盘、面板堆内存、执行统计、近 7 天系列和最近 6 条运行。',
-        response: { code: 200, data: { version: '1.1.0', uptime: 3600, platform: 'windows/amd64', tasks: 6, running: 1, queued: 0, today: 12, success: 300, failed: 4, successRate: 98.68, cpu: 12.4, memory: 43.1, disk: 55.2, series: [{ date: '2026-11-10', success: 5, failed: 0 }], recent: [] } },
+        response: { code: 200, data: { version: '1.0.0', uptime: 3600, platform: 'windows/amd64', tasks: 6, running: 1, queued: 0, today: 12, success: 300, failed: 4, successRate: 98.68, cpu: 12.4, memory: 43.1, disk: 55.2, series: [{ date: '2026-11-10', success: 5, failed: 0 }], recent: [] } },
       },
       {
         id: 'system-runtimes', method: 'GET', path: '/system/runtimes', tabs: apiOnly,
-        summary: '运行时检测', description: '检测 Python、Node、Bash、Git、npm 是否可用。',
-        response: { code: 200, data: [{ name: 'Python', available: true, path: '/usr/bin/python3' }] },
+        summary: '运行时检测', description: '检测 Python、Node、Bash、Git、npm 是否可用。Python 项额外返回 version、source（system / configured-path / configured-version / configured-fallback）与配置值。',
+        response: { code: 200, data: [{ name: 'Python', available: true, path: '/usr/bin/python3.10', version: '3.10.13', source: 'configured-version', configuredPath: '', configuredVersion: '3.10' }] },
+      },
+      {
+        id: 'system-python-rebuild', method: 'POST', path: '/system/python/rebuild', tabs: apiOnly,
+        summary: '重建 Python 环境', description: '用当前配置的 Python 重建 data/packages/venv 并自动重装 Python 依赖。有任务运行时返回 409；旧环境会先备份，失败自动回滚。',
+        response: { code: 200, data: { python: '/usr/bin/python3.10', version: '3.10.13', path: '/app/data/packages/venv', reinstalled: 2, reinstalledIds: [1, 3], output: '' } },
       },
       {
         id: 'system-config-get', method: 'GET', path: '/system/config', tabs: apiOnly,
@@ -691,8 +696,8 @@ export const apiGroups = [
       },
       {
         id: 'system-settings-put', method: 'PUT', path: '/system/settings', tabs: apiOnly,
-        summary: '保存系统设置', description: '支持部分更新：concurrency（1–32）/ timeout（1–604800 秒）/ retentionDays（1–3650）/ githubRepo / webhookURL / notifyFailures / npmMirror / pythonMirror / linuxMirror。镜像为 HTTP(S) URL，留空使用默认源。未知键会返回 400。',
-        body: { concurrency: '8', timeout: '3600', retentionDays: '30', npmMirror: 'https://registry.npmmirror.com', pythonMirror: 'https://pypi.tuna.tsinghua.edu.cn/simple', linuxMirror: 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu/' },
+        summary: '保存系统设置', description: '支持部分更新：concurrency（1–32）/ timeout（1–604800 秒）/ retentionDays（1–3650）/ githubRepo / webhookURL / notifyFailures / npmMirror / pythonMirror / linuxMirror / pythonPath / pythonVersion。镜像为 HTTP(S) URL，留空使用默认源；pythonPath 需为存在的文件，pythonVersion 形如 3.11，两者留空自动检测。未知键会返回 400。',
+        body: { concurrency: '8', timeout: '3600', retentionDays: '30', npmMirror: 'https://registry.npmmirror.com', pythonMirror: 'https://pypi.tuna.tsinghua.edu.cn/simple', linuxMirror: 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu/', pythonPath: '', pythonVersion: '3.11' },
         response: { code: 200, data: null },
       },
       {
@@ -730,7 +735,7 @@ export const apiGroups = [
       {
         id: 'system-update-check', method: 'GET', path: '/system/update', tabs: apiOnly,
         summary: '检查更新', description: '查询 GitHub 最新稳定 Release，返回当前版本、最新版本、是否有更新与发行说明。',
-        response: { code: 200, data: { current: '1.1.0', latest: '1.1.0', available: false, body: '', url: '', signedUpdates: false, staged: '' } },
+        response: { code: 200, data: { current: '1.0.0', latest: '1.0.0', available: false, body: '', url: '', signedUpdates: false, staged: '' } },
       },
       {
         id: 'system-update-download', method: 'POST', path: '/system/update/download', tabs: apiOnly,

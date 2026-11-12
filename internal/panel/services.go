@@ -79,9 +79,22 @@ func (app *App) systemAPI(writer http.ResponseWriter, request *http.Request, tai
 		result := []Object{}
 		for name, program := range map[string]string{"Python": app.python(), "Node.js": "node", "Shell": findShell(), "Git": "git", "npm": "npm"} {
 			location, err := exec.LookPath(program)
-			result = append(result, Object{"name": name, "available": err == nil, "path": location})
+			entry := Object{"name": name, "available": err == nil, "path": location}
+			if name == "Python" {
+				// 补充版本与来源，供设置页展示实际生效的解释器。
+				entry["version"] = pythonVersion(request.Context(), program)
+				entry["source"] = app.pythonSource(request.Context())
+				entry["configuredPath"] = strings.TrimSpace(app.store.setting("pythonPath", ""))
+				entry["configuredVersion"] = strings.TrimSpace(app.store.setting("pythonVersion", ""))
+			}
+			result = append(result, entry)
 		}
 		ok(writer, result)
+		return
+	}
+	// 公告内容：服务端代理远端 tz.json，多源回退，失败返回空文本。
+	if tail == "notice" && request.Method == "GET" {
+		app.noticeAPI(writer, request)
 		return
 	}
 	if tail == "notifications" {
@@ -190,15 +203,10 @@ func (app *App) downloadText(ctx context.Context, address string, limit int64) (
 }
 
 func (app *App) python() string {
-	bin := "bin/python"
-	if runtime.GOOS == "windows" {
-		bin = "Scripts/python.exe"
+	if venv := app.venvPython(); venv != "" {
+		return venv
 	}
-	path := filepath.Join(app.root, "packages", "venv", filepath.FromSlash(bin))
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-	return findPython()
+	return app.resolvePythonBase()
 }
 func (app *App) installDependency(ctx context.Context, item Object, writer io.Writer) error {
 	app.depMu.Lock()
@@ -237,8 +245,9 @@ func (app *App) installDependency(ctx context.Context, item Object, writer io.Wr
 		}
 	case 1:
 		venv := filepath.Join(app.root, "packages", "venv")
-		if app.python() == findPython() {
-			if err := app.process(ctx, app.root, writer, findPython(), "-m", "venv", venv); err != nil {
+		if !app.hasVenv() {
+			// 用配置的基础 Python 创建 venv，而不是硬编码的 findPython。
+			if err := app.process(ctx, app.root, writer, app.resolvePythonBase(), "-m", "venv", venv); err != nil {
 				return err
 			}
 		}

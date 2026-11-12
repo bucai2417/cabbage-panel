@@ -63,3 +63,14 @@ th.sortable.sorted.asc .sort-arrow{border-top:0;border-bottom:5px solid currentC
 .terminal-copy{position:absolute;top:10px;right:10px;z-index:2;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #2f4a3d;border-radius:7px;background:#1b3227cc;color:#9fc7ae;padding:0;opacity:.55;transition:opacity .16s,background .16s,color .16s}
 .terminal-copy:hover{opacity:1;background:#22402f;color:#d3ecdd}
 .terminal-copy:focus-visible{opacity:1;outline:2px solid #4fbf8c;outline-offset:2px}
+
+/* 运行环境：版本号与回退提示 */
+.runtime-version{font-size:10px;font-weight:400;color:#6cae87;background:#f0f8f3;border-radius:4px;padding:1px 6px;margin-left:4px}
+.runtime-warn{font-size:10px;color:#c98418;margin-top:3px}
+
+/* 通知公告弹层 */
+.notice-modal{max-width:560px}
+.notice-body{padding:20px 26px;min-height:88px}
+.notice-text{margin:0;font-size:13px;line-height:1.9;color:#374c44;white-space:pre-wrap;overflow-wrap:anywhere}
+.notice-body .muted{font-size:12px}
+.notice-modal footer{justify-content:space-between}
