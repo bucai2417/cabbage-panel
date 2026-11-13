@@ -128,6 +128,63 @@ async function downloadSelected() {
     toast('已打包 ' + paths.length + ' 个文件')
   } catch (error) { toast(error.message, 'error') }
 }
+// 拖拽上传：拖入文件树或编辑区即上传，拖到文件夹行则放入该文件夹。
+const dropActive = ref(false), dropFolder = ref('')
+let dragDepth = 0
+function isFileDrag(event) { return Array.from(event.dataTransfer?.types || []).includes('Files') }
+function folderAt(event) {
+  const row = event.target instanceof Element ? event.target.closest('.tree-row') : null
+  if (!row || row.dataset.leaf === 'true') return ''
+  return row.dataset.path || ''
+}
+function onDragEnter(event) {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  dragDepth++
+  dropActive.value = true
+}
+function onDragOver(event) {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  dropFolder.value = folderAt(event)
+}
+function onDragLeave(event) {
+  if (!isFileDrag(event)) return
+  dragDepth = Math.max(0, dragDepth - 1)
+  if (dragDepth === 0) { dropActive.value = false; dropFolder.value = '' }
+}
+async function uploadFiles(list, directory) {
+  if (!list.length) return
+  if (!await canLeave()) return
+  saving.value = true
+  let done = 0
+  const errors = []
+  for (const file of list) {
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      if (directory) form.append('path', directory)
+      const result = await api('/' + mode.value + '/upload', 'POST', form)
+      done++
+      expandParents(result.path)
+      active.value = result.path
+    } catch (error) { errors.push(file.name + '：' + error.message) }
+  }
+  await load()
+  saving.value = false
+  if (errors.length) toast(errors[0] + (errors.length > 1 ? ' 等 ' + errors.length + ' 个失败' : ''), 'error')
+  else toast('已上传 ' + done + ' 个文件到 ' + (directory || '根目录'))
+}
+async function onDrop(event) {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  const directory = dropFolder.value
+  dragDepth = 0
+  dropActive.value = false
+  dropFolder.value = ''
+  await uploadFiles(Array.from(event.dataTransfer?.files || []), directory)
+}
 onMounted(() => { action(load); document.addEventListener('pointerdown', closeMenu); window.addEventListener('keydown', keyboard) })
 onBeforeUnmount(() => { document.removeEventListener('pointerdown', closeMenu); window.removeEventListener('keydown', keyboard) })
 </script>
@@ -136,8 +193,8 @@ onBeforeUnmount(() => { document.removeEventListener('pointerdown', closeMenu); 
   <div v-if="mode === 'configs'" class="config-tabs tabs"><button :class="{ active: configTab === 'files' }" @click="switchConfig('files')">系统配置与执行钩子</button><button :class="{ active: configTab === 'notifications' }" @click="switchConfig('notifications')"><Icon name="Bell" :size="15" />通知配置</button></div>
   <NotificationSettings v-if="mode === 'configs' && configTab === 'notifications'" ref="notificationForm" />
   <template v-else><div v-if="selected.length" class="bulk-bar"><span>已选择 {{ selected.length }} 项</span><button :disabled="saving" @click="downloadSelected"><Icon name="Download" :size="15" />下载</button><button :disabled="saving" @click="operate('move', selected)">移动</button><button :disabled="saving" @click="operate('copy', selected)">复制</button><button class="danger-text" :disabled="saving" @click="operate('delete', selected)">删除</button><button @click="selected = []">取消选择</button></div><div v-if="operationErrors.length" class="operation-errors" role="alert"><div v-for="item in operationErrors" :key="item.path">{{ item.path }}：{{ item.error }}</div><button class="small-button" @click="operationErrors = []">关闭</button></div>
-  <section class="card editor-layout" :class="{ 'workspace-fullscreen': fullScreen }"><aside class="file-browser"><div class="search-input"><Icon name="Search" :size="16" /><input v-model="search" aria-label="搜索文件" placeholder="搜索文件与文件夹…" /></div><div class="file-browser-heading"><label class="inline-check"><input type="checkbox" aria-label="选择可见文件" :checked="selectable.length > 0 && selectable.every(file => selected.includes(file.path))" :indeterminate="selected.length > 0 && !selectable.every(file => selected.includes(file.path))" @change="selectAll" />{{ files.filter(file => file.isLeaf).length }} 文件</label><div class="actions"><button class="icon-button" aria-label="展开全部文件夹" title="展开全部" @click="expanded = new Set(directories.map(file => file.path))"><Icon name="FolderOpen" :size="15" /></button><button class="icon-button" aria-label="折叠全部文件夹" title="折叠全部" @click="expanded = new Set()"><Icon name="Folder" :size="15" /></button><button class="icon-button" aria-label="刷新文件" @click="action(load)"><Icon name="RefreshCw" :size="15" /></button></div></div>
-  <div class="file-tree" role="tree" aria-label="文件夹树"><div v-for="file in visible" :key="file.path" class="tree-row" :class="{ active: active === file.path, selected: selected.includes(file.path) }" :style="{ paddingLeft: 8 + file.depth * 15 + 'px' }" role="treeitem" :aria-level="file.depth + 1" :aria-expanded="file.isLeaf ? undefined : expanded.has(file.path) || !!search" :aria-selected="active === file.path"><input v-if="!file.builtin" v-model="selected" type="checkbox" :value="file.path" :aria-label="'选择文件 ' + file.path" /><span v-else class="builtin-file-marker" title="内置配置"><Icon name="LockKeyhole" :size="13" /></span><button class="tree-file-button" :title="file.path + (file.isLeaf ? ' · ' + bytes(file.size) : '')" @click="open(file)"><Icon :name="file.isLeaf ? 'FileCode2' : expanded.has(file.path) || search ? 'FolderOpen' : 'Folder'" :size="16" /><span>{{ file.name }}</span></button><button class="icon-button file-menu-trigger" :aria-label="'文件菜单 ' + file.path" aria-haspopup="menu" @click.stop="showMenu(file, $event)"><Icon name="MoreHorizontal" :size="16" /></button></div><p v-if="!visible.length" class="file-empty">{{ search ? '没有匹配的文件' : '暂无文件，可以创建文件夹或脚本。' }}</p></div></aside>
+  <section class="card editor-layout" :class="{ 'workspace-fullscreen': fullScreen, 'drop-active': dropActive }" @dragenter="onDragEnter" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop"><div v-if="dropActive" class="drop-overlay"><div class="drop-card"><Icon name="Upload" :size="30" /><strong>释放以上传文件</strong><span>目标：{{ dropFolder || currentDirectory || '根目录' }} · 支持多文件</span></div></div><aside class="file-browser"><div class="search-input"><Icon name="Search" :size="16" /><input v-model="search" aria-label="搜索文件" placeholder="搜索文件与文件夹…" /></div><div class="file-browser-heading"><label class="inline-check"><input type="checkbox" aria-label="选择可见文件" :checked="selectable.length > 0 && selectable.every(file => selected.includes(file.path))" :indeterminate="selected.length > 0 && !selectable.every(file => selected.includes(file.path))" @change="selectAll" />{{ files.filter(file => file.isLeaf).length }} 文件</label><div class="actions"><button class="icon-button" aria-label="展开全部文件夹" title="展开全部" @click="expanded = new Set(directories.map(file => file.path))"><Icon name="FolderOpen" :size="15" /></button><button class="icon-button" aria-label="折叠全部文件夹" title="折叠全部" @click="expanded = new Set()"><Icon name="Folder" :size="15" /></button><button class="icon-button" aria-label="刷新文件" @click="action(load)"><Icon name="RefreshCw" :size="15" /></button></div></div>
+  <div class="file-tree" role="tree" aria-label="文件夹树"><div v-for="file in visible" :key="file.path" class="tree-row" :class="{ active: active === file.path, selected: selected.includes(file.path), 'drop-target': dropActive && dropFolder === file.path }" :style="{ paddingLeft: 8 + file.depth * 15 + 'px' }" :data-path="file.path" :data-leaf="file.isLeaf ? 'true' : 'false'" role="treeitem" :aria-level="file.depth + 1" :aria-expanded="file.isLeaf ? undefined : expanded.has(file.path) || !!search" :aria-selected="active === file.path"><input v-if="!file.builtin" v-model="selected" type="checkbox" :value="file.path" :aria-label="'选择文件 ' + file.path" /><span v-else class="builtin-file-marker" title="内置配置"><Icon name="LockKeyhole" :size="13" /></span><button class="tree-file-button" :title="file.path + (file.isLeaf ? ' · ' + bytes(file.size) : '')" @click="open(file)"><Icon :name="file.isLeaf ? 'FileCode2' : expanded.has(file.path) || search ? 'FolderOpen' : 'Folder'" :size="16" /><span>{{ file.name }}</span></button><button class="icon-button file-menu-trigger" :aria-label="'文件菜单 ' + file.path" aria-haspopup="menu" @click.stop="showMenu(file, $event)"><Icon name="MoreHorizontal" :size="16" /></button></div><p v-if="!visible.length" class="file-empty">{{ search ? '没有匹配的文件' : '暂无文件，可以创建文件夹或脚本。' }}</p></div></aside>
   <div class="editor-main"><div v-if="fullScreen" class="fullscreen-strip"><span>全屏工作区</span><button class="small-button" @click="fullScreen = false">退出全屏 · Esc</button></div><FileEditor v-if="active" :key="mode + active" ref="editor" :path="active" :kind="mode" @saved="load" @expand="fullScreen = !fullScreen" /><div v-else class="empty-state editor-empty"><div class="empty-icon"><Icon name="Code2" :size="34" /></div><h3>{{ mode === 'configs' ? '配置工作环境' : '选择一个脚本，开始编辑' }}</h3><p>{{ mode === 'configs' ? 'system.json 管理系统参数，notifications.json 管理通知，Shell 配置与前后置钩子在任务执行时生效。' : '支持文件夹树、多选、移动复制与创建定时任务。' }}</p><button class="button" @click="mode === 'configs' ? open(files.find(file => file.path === 'system.json')) : create('file')">{{ mode === 'configs' ? '打开系统配置' : '新建脚本' }}</button></div></div></section></template>
   <FormDialog v-if="modal" :title="titles[modal.type]" :fields="fields" :initial="modal.initial" :busy="saving" @close="modal = null" @submit="submit" />
   <Teleport to="body"><div v-if="menu" class="file-context-menu" role="menu" :style="{ left: menu.left + 'px', top: menu.top + 'px' }"><button v-if="menu.file.isLeaf" role="menuitem" @click="open(menu.file); menu = null"><Icon name="Pencil" :size="15" />打开编辑</button><template v-else><button role="menuitem" @click="create('file', menu.file.path)"><Icon name="Plus" :size="15" />新建文件</button><button role="menuitem" @click="create('folder', menu.file.path)"><Icon name="FolderPlus" :size="15" />新建子文件夹</button></template><button v-if="menu.file.isLeaf" role="menuitem" @click="download(menu.file)"><Icon name="Download" :size="15" />下载文件</button><template v-if="!menu.file.builtin"><button role="menuitem" @click="operate('rename', [menu.file.path])"><Icon name="Pencil" :size="15" />重命名</button><button role="menuitem" @click="operate('move', [menu.file.path])"><Icon name="Move" :size="15" />移动</button><button role="menuitem" @click="operate('copy', [menu.file.path])"><Icon name="Copy" :size="15" />复制</button><button role="menuitem" class="danger-text" @click="operate('delete', [menu.file.path])"><Icon name="Trash2" :size="15" />删除</button></template></div></Teleport>

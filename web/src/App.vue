@@ -16,20 +16,37 @@ const ready = ref(false), loggedIn = ref(false), initialized = ref(true), busy =
 const user = ref(''), version = ref(''), menuOpen = ref(false), globalSearch = ref(''), updateInfo = ref(null), settingsTab = ref('')
 // 公告弹层：异步加载，失败静默跳过，不影响主界面。
 const noticeOpen = ref(false), noticeText = ref(''), noticeLoading = ref(false), noticeLoaded = ref(false)
-async function openNotice() {
-  noticeOpen.value = true
-  if (noticeLoaded.value || noticeLoading.value) return
-  noticeLoading.value = true
+// 未读红点：对比公告内容的哈希与上次已读，避免同一公告重复提示。
+const noticeUnread = ref(false), noticeReadKey = 'cabbage-notice-read'
+function noticeHash(text) { let h = 2166136261; for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619) } return (h >>> 0).toString(16) + '-' + text.length }
+function markNoticeRead() { if (noticeText.value) { try { localStorage.setItem(noticeReadKey, noticeHash(noticeText.value)) } catch { /* 忽略存储失败 */ } } noticeUnread.value = false }
+async function checkNotice() {
   try {
     const result = await api('/system/notice')
     noticeText.value = (result && result.text) || ''
     noticeLoaded.value = true
+    let saved = ''
+    try { saved = localStorage.getItem(noticeReadKey) || '' } catch { /* 忽略存储失败 */ }
+    noticeUnread.value = !!noticeText.value && noticeHash(noticeText.value) !== saved
+  } catch { /* 离线或未配置时静默 */ }
+}
+async function openNotice() {
+  noticeOpen.value = true
+  if (noticeLoading.value) return
+  noticeLoading.value = true
+  try {
+    if (!noticeLoaded.value) {
+      const result = await api('/system/notice')
+      noticeText.value = (result && result.text) || ''
+      noticeLoaded.value = true
+    }
   } catch {
     // 网络不可达时保持空文本，不弹出错误提示。
     noticeText.value = ''
   } finally {
     noticeLoading.value = false
   }
+  markNoticeRead()
 }
 const login = ref({ username: '', password: '', setupToken: '' })
 const remember = ref(false)
@@ -130,8 +147,8 @@ async function onHash() {
 function expired() { loggedIn.value = false; login.value.password = ''; error.value = '登录已过期，请重新登录' }
 let updateTimer = null
 async function checkUpdateHint() { if (!loggedIn.value) return; try { updateInfo.value = await api('/system/update') } catch { /* 未配置仓库或离线时静默忽略 */ } }
-async function openUpdate() { settingsTab.value = 'update'; await navigate('settings') }
-watch(loggedIn, value => { if (value) checkUpdateHint() })
+async function openUpdate() { settingsTab.value = 'about'; await navigate('settings') }
+watch(loggedIn, value => { if (value) { checkUpdateHint(); checkNotice() } })
 function keyboard(event) { if ((event.ctrlKey || event.metaKey) && event.key === 'k') { event.preventDefault(); document.querySelector('#global-search')?.focus() } }
 async function bootstrap() {
   try {
@@ -154,7 +171,7 @@ onMounted(async () => {
   restoreRemember()
   await nextTick()
   await bootstrap()
-  if (loggedIn.value) checkUpdateHint()
+  if (loggedIn.value) { checkUpdateHint(); checkNotice() }
   updateTimer = setInterval(() => { if (loggedIn.value) checkUpdateHint() }, 30 * 60 * 1000)
   window.addEventListener('hashchange', onHash); window.addEventListener('session-expired', expired); window.addEventListener('keydown', keyboard)
 })
@@ -165,7 +182,7 @@ onUnmounted(() => { if (updateTimer) clearInterval(updateTimer); window.removeEv
   <div v-if="!ready" class="loading-screen"><img src="/logo.png" alt="" /><span>正在唤醒您的工作空间…</span></div>
   <div v-else-if="!loggedIn" class="login-screen">
     <div class="login-brand"><img src="/logo.png" alt="白菜标志" /><span>大白菜面板</span><small>A LITTLE GREEN. A LOT DONE.</small></div>
-    <section class="login-card"><span class="eyebrow">YOUR AUTOMATION WORKSPACE</span><h1>{{ initialized ? '欢迎回来。' : '种下自动化的第一步。' }}</h1><p>{{ initialized ? '登录大白菜面板，让工作轻一点。' : '创建管理员账户，开始您的自动化之旅。' }}</p>
+    <section class="login-card"><h1>{{ initialized ? '欢迎回来。' : '种下自动化的第一步。' }}</h1><p>{{ initialized ? '登录大白菜面板，让工作轻一点。' : '创建管理员账户，开始您的自动化之旅。' }}</p>
       <form @submit.prevent="submitLogin"><label v-if="!initialized" class="field"><span>首次设置密钥</span><input v-model="login.setupToken" aria-label="首次设置密钥" required type="password" autocomplete="off" placeholder="查看启动日志或 data/setup.key" /><small>仅首次初始化需要，用于确认您拥有这台服务器。</small></label><label class="field"><span>用户名</span><input v-model="login.username" autocomplete="username" required minlength="2" placeholder="请输入用户名" /></label><label class="field"><span>密码</span><input v-model="login.password" type="password" :autocomplete="initialized ? 'current-password' : 'new-password'" required :minlength="initialized ? 1 : 6" :placeholder="initialized ? '请输入密码' : '至少 6 个字符'" /></label><label v-if="initialized" class="login-remember"><input v-model="remember" type="checkbox" /><span>记住账号密码</span><small>仅保存在本机浏览器；共用电脑请勿勾选。</small></label><p v-if="error" class="inline-error" role="alert">{{ error }}</p><button class="button primary login-button" :disabled="busy"><Icon :name="busy ? 'LoaderCircle' : 'ArrowRight'" :class="{ spin: busy }" />{{ busy ? '请稍候…' : initialized ? '进入工作空间' : '创建并登录' }}</button></form>
       <div class="login-note"><Icon name="ShieldCheck" :size="15" />本地数据 · 自主掌控 · 轻量运行</div>
     </section><div class="login-footer">大白菜面板 v{{ version }} · 把时间留给更重要的事</div>
@@ -176,7 +193,7 @@ onUnmounted(() => { if (updateTimer) clearInterval(updateTimer); window.removeEv
       <div class="nav-caption">工作空间</div><nav aria-label="主导航"><button v-for="item in navigation" :key="item.id" :class="{ active: page === item.id }" :aria-current="page === item.id ? 'page' : undefined" @click="navigate(item.id)"><Icon :name="item.icon" /><span>{{ item.label }}</span><span v-if="page === item.id" class="nav-dot" /></button></nav>
       <div class="sidebar-bottom"><button v-if="updateInfo && updateInfo.available" type="button" class="sidebar-status sidebar-status-update" @click="openUpdate" :title="'发现新版本 v' + updateInfo.latest + '，点击更新'"><span class="update-dot" /><div><strong>发现新版本 v{{ updateInfo.latest }}</strong><small>当前 v{{ version }} · 点击更新</small></div></button><div v-else class="sidebar-status"><span class="live-dot" /><div><strong>服务已连接</strong><small>v{{ version }} · 本地数据</small></div></div></div>
     </aside>
-    <div class="main-shell"><header class="topbar"><button class="icon-button mobile-menu" aria-label="打开导航" @click="menuOpen = !menuOpen"><Icon name="Menu" /></button><form class="global-search" @submit.prevent="navigate('tasks')"><Icon name="Search" /><input id="global-search" v-model="globalSearch" placeholder="搜索任务、命令、关键词…" aria-label="搜索任务" /><kbd>Ctrl K</kbd></form><div class="topbar-right"><span class="topbar-date">{{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }) }}</span><button class="icon-button" title="查看通知" aria-label="查看通知" @click="openNotice"><Icon name="Bell" /></button><div class="user-avatar">{{ user.slice(0, 1).toUpperCase() }}</div><span class="user-name">{{ user }}</span><button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><Icon name="LogOut" :size="17" /></button></div></header>
+    <div class="main-shell"><header class="topbar"><button class="icon-button mobile-menu" aria-label="打开导航" @click="menuOpen = !menuOpen"><Icon name="Menu" /></button><form class="global-search" @submit.prevent="navigate('tasks')"><Icon name="Search" /><input id="global-search" v-model="globalSearch" placeholder="搜索任务、命令、关键词…" aria-label="搜索任务" /><kbd>Ctrl K</kbd></form><div class="topbar-right"><span class="topbar-date">{{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }) }}</span><button class="icon-button notice-bell" title="查看通知" aria-label="查看通知" @click="openNotice"><Icon name="Bell" /><span v-if="noticeUnread" class="notice-dot" aria-hidden="true" /></button><div class="user-avatar">{{ user.slice(0, 1).toUpperCase() }}</div><span class="user-name">{{ user }}</span><button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><Icon name="LogOut" :size="17" /></button></div></header>
       <main>
         <Dashboard v-if="page === 'dashboard'" @navigate="navigate" />
         <Tasks v-else-if="page === 'tasks'" :global-search="globalSearch" />

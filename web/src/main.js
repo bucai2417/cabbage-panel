@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import './style.css'
+import './content.css'
 import './panels.css'
 import './responsive.css'
 import './workspace.css'

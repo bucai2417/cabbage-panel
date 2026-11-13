@@ -10,38 +10,78 @@ select:hover{border-color:#b6dfcc}
 .button.warning{background:#dea02f;border-color:#dea02f;color:#fff;box-shadow:0 4px 12px #dea02f26}
 .button.warning:hover{background:#cd9123;border-color:#cd9123;transform:translateY(-1px)}
 
-.confirm-overlay{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:24px;background:#0d241b66;backdrop-filter:blur(6px)}
-.confirm-dialog{width:100%;max-width:468px;background:#fff;border:1px solid #e9f0eb;border-radius:18px;box-shadow:0 28px 90px #06211733;padding:26px 26px 20px;display:flex;flex-direction:column;gap:16px}
+.confirm-overlay{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(10,32,24,.42);backdrop-filter:blur(8px) saturate(1.2);-webkit-backdrop-filter:blur(8px) saturate(1.2)}
+.confirm-dialog{width:100%;max-width:468px;background:#fff;border:1px solid var(--border);border-radius:var(--r-xl);box-shadow:0 30px 100px -20px rgba(6,33,23,.4),0 2px 8px rgba(6,33,23,.08);padding:25px 25px 19px;display:flex;flex-direction:column;gap:15px}
 .confirm-head{display:flex;align-items:flex-start;gap:14px}
-.confirm-icon{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;flex-shrink:0;background:#fff0ee;color:#e25b52}
-.confirm-dialog.warning .confirm-icon{background:#fff6e6;color:#d99a2b}
-.confirm-dialog.info .confirm-icon{background:#e9f8f1;color:#08a66f}
-.confirm-head h2{font-size:18px;line-height:1.45;color:#1b2b28;margin-top:2px}
+.confirm-icon{width:44px;height:44px;border-radius:13px;display:grid;place-items:center;flex-shrink:0;background:var(--red-soft);color:var(--red);box-shadow:inset 0 1px 0 rgba(255,255,255,.6)}
+.confirm-dialog.warning .confirm-icon{background:var(--amber-soft);color:var(--amber)}
+.confirm-dialog.info .confirm-icon{background:var(--green-soft);color:var(--green)}
+.confirm-head h2{font-size:18px;line-height:1.45;color:var(--ink);margin-top:2px}
 .confirm-head .eyebrow{display:block;margin-bottom:2px}
-.confirm-message{font-size:13px;line-height:1.75;color:#5f7869;margin:0}
-.confirm-details{list-style:none;margin:0;padding:10px 12px;display:flex;flex-direction:column;gap:7px;background:#f7faf8;border:1px solid #edf2ee;border-radius:10px;max-height:170px;overflow:auto;font-size:12px;color:#4e6b5a}
+.confirm-message{font-size:13px;line-height:1.75;color:var(--ink-body);margin:0}
+.confirm-details{list-style:none;margin:0;padding:10px 12px;display:flex;flex-direction:column;gap:7px;background:var(--surface-sunken);border:1px solid var(--border-soft);border-radius:10px;max-height:170px;overflow:auto;font-size:12px;color:var(--ink-body)}
 .confirm-details li{display:flex;gap:8px;align-items:flex-start;overflow-wrap:anywhere;line-height:1.55}
 .confirm-details li:before{content:"";width:5px;height:5px;border-radius:50%;background:#b9cfc1;margin-top:7px;flex-shrink:0}
 .confirm-dialog.danger .confirm-details{border-color:#f6e2de;background:#fffaf9}
 .confirm-dialog.danger .confirm-details li:before{background:#e8a198}
-.confirm-note{display:flex;gap:8px;align-items:flex-start;font-size:11px;line-height:1.7;color:#8a9e92;margin:0;padding:10px 12px;background:#f5f9f6;border-radius:9px}
+.confirm-note{display:flex;gap:8px;align-items:flex-start;font-size:11px;line-height:1.7;color:var(--ink-muted);margin:0;padding:10px 12px;background:var(--surface-sunken);border-radius:9px}
 .confirm-note svg{flex-shrink:0;margin-top:2px}
 .confirm-dialog.danger .confirm-note{color:#a1695f;background:#fdf4f1}
 .confirm-dialog footer{display:flex;justify-content:flex-end;gap:10px;padding-top:6px}
 .confirm-dialog footer .button{min-width:88px}
 
-.confirm-pop-enter-active,.confirm-pop-leave-active{transition:opacity .16s ease}
-.confirm-pop-enter-active .confirm-dialog,.confirm-pop-leave-active .confirm-dialog{transition:transform .18s ease,opacity .18s ease}
+.confirm-pop-enter-active,.confirm-pop-leave-active{transition:opacity .18s var(--ease)}
+.confirm-pop-enter-active .confirm-dialog,.confirm-pop-leave-active .confirm-dialog{transition:transform .22s var(--ease-out),opacity .22s var(--ease-out)}
 .confirm-pop-enter-from,.confirm-pop-leave-to{opacity:0}
-.confirm-pop-enter-from .confirm-dialog,.confirm-pop-leave-to .confirm-dialog{transform:translateY(10px) scale(.98);opacity:0}
+.confirm-pop-enter-from .confirm-dialog,.confirm-pop-leave-to .confirm-dialog{transform:translateY(12px) scale(.97);opacity:0}
 
 .bulk-bar .danger-text{border-radius:6px;padding:4px 8px;transition:background .16s}
 .bulk-bar .danger-text:hover{background:#ffe9e6}
 
-@keyframes page-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-.main-shell main>*{animation:page-in .22s ease-out}
-.stat-card{transition:transform .2s ease,box-shadow .2s ease}
-@media(hover:hover){.stat-card:hover{transform:translateY(-2px);box-shadow:0 12px 28px #21382d0d}}
+/* 页面入场：轻推 + 淡入，只做一次；用 backwards，结束后不残留 transform，
+   避免形成层叠上下文把工具栏下拉菜单困在内部被后续卡片盖住 */
+@keyframes page-in{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+.main-shell main>*{animation:page-in .34s cubic-bezier(.16,1,.3,1) backwards}
+.main-shell main>*:nth-child(2){animation-delay:.05s}
+.main-shell main>*:nth-child(3){animation-delay:.1s}
+.main-shell main>*:nth-child(4){animation-delay:.14s}
+
+/* 统计数字入场：从下方浮起 */
+@keyframes stat-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.stat-number{animation:stat-in .5s cubic-bezier(.16,1,.3,1) both}
+.stat-card:nth-child(1) .stat-number{animation-delay:.04s}
+.stat-card:nth-child(2) .stat-number{animation-delay:.1s}
+.stat-card:nth-child(3) .stat-number{animation-delay:.16s}
+.stat-card:nth-child(4) .stat-number{animation-delay:.22s}
+
+/* 环形进度：入场时轻微展开 */
+@keyframes ring-in{from{transform:rotate(-90deg) scale(.94);opacity:0}to{transform:rotate(0) scale(1);opacity:1}}
+.donut{animation:ring-in .7s cubic-bezier(.16,1,.3,1) both}
+
+/* 图表区淡入 */
+@keyframes chart-in{from{opacity:0}to{opacity:1}}
+.line-chart svg{animation:chart-in .8s ease-out both .12s}
+
+/* 任务行错峰入场 */
+@keyframes row-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.task-row{animation:row-in .4s cubic-bezier(.16,1,.3,1) backwards}
+.task-row:nth-child(1){animation-delay:.02s}
+.task-row:nth-child(2){animation-delay:.06s}
+.task-row:nth-child(3){animation-delay:.1s}
+.task-row:nth-child(4){animation-delay:.14s}
+.task-row:nth-child(5){animation-delay:.18s}
+.task-row:nth-child(6){animation-delay:.22s}
+
+/* 柱状图生长 */
+@keyframes bar-grow{from{transform:scaleY(.15);opacity:.3}to{transform:scaleY(1);opacity:1}}
+.bar-track i{transform-origin:bottom;animation:bar-grow .6s cubic-bezier(.16,1,.3,1) both}
+.day-bar:nth-child(1) .bar-track i{animation-delay:.04s}
+.day-bar:nth-child(2) .bar-track i{animation-delay:.09s}
+.day-bar:nth-child(3) .bar-track i{animation-delay:.14s}
+.day-bar:nth-child(4) .bar-track i{animation-delay:.19s}
+.day-bar:nth-child(5) .bar-track i{animation-delay:.24s}
+.day-bar:nth-child(6) .bar-track i{animation-delay:.29s}
+.day-bar:nth-child(7) .bar-track i{animation-delay:.34s}
 
 *{scrollbar-width:thin;scrollbar-color:#c9d8cf transparent}
 ::-webkit-scrollbar{width:9px;height:9px}
@@ -66,12 +106,12 @@ select:hover{border-color:#b6dfcc}
 .stat-card:hover{transform:none}
 }
 
-/* 精简侧边栏底部 */
+/* 精简侧边栏底部（浅色侧栏上的状态卡） */
 .sidebar-bottom{margin-top:auto;padding-top:12px}
-.sidebar-status{display:flex;align-items:center;gap:9px;padding:11px 12px;border:1px solid #e5f1e8;background:linear-gradient(100deg,#f2fbf6,#f8fdfa);border-radius:10px;color:#4f7a62;margin:0 2px}
+.sidebar-status{display:flex;align-items:center;gap:9px;padding:11px 12px;border:1px solid rgba(23,201,138,.2);background:linear-gradient(100deg,var(--green-tint),#fbfefc);border-radius:10px;color:var(--ink-body);margin:0 2px}
 .sidebar-status>div{display:flex;flex-direction:column;gap:3px;min-width:0}
-.sidebar-status strong{font-size:11px;color:#2d7451;font-weight:600}
-.sidebar-status small{font-size:9px;color:#94a99d}
+.sidebar-status strong{font-size:11px;color:#0d7a54;font-weight:600}
+.sidebar-status small{font-size:9px;color:var(--ink-faint)}
 
 /* 资源列表 */
 .resource-copy{min-width:0;display:flex;flex-direction:column;align-items:flex-start}
@@ -340,7 +380,7 @@ body.debug-open{overflow:hidden}
 }
 
 /* 设置页导航固定与开放应用/审计增强 */
-.settings-nav{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 32px);overflow:auto;padding:4px;background:#f5f7fae6;backdrop-filter:blur(8px);border-radius:12px;z-index:5}
+.settings-nav{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 32px);overflow:auto;padding:4px;background:rgba(246,248,246,.85);backdrop-filter:blur(8px);border-radius:12px;z-index:5}
 .app-dialog-hint{margin-bottom:0;font-size:11px}
 .scope-field{gap:8px}
 .scope-actions{display:flex;gap:6px;margin-bottom:2px}
@@ -383,16 +423,39 @@ body.debug-open{overflow:hidden}
 @media(max-width:1100px){
 .settings-nav{top:8px;flex-direction:row;flex-wrap:wrap;max-height:none;margin-bottom:4px;background:#f5f7faf2;z-index:6}
 }
-.sidebar-status-update{width:100%;text-align:left;cursor:pointer;border:1px solid #dff3e6;background:linear-gradient(100deg,#eafaf0,#f6fdf9)}
-.sidebar-status-update:hover{background:linear-gradient(100deg,#e0f7e9,#f2fdf7)}
+.sidebar-status-update{width:100%;text-align:left;cursor:pointer;border:1px solid rgba(245,166,35,.3);background:linear-gradient(100deg,var(--amber-soft),#fffefb);color:var(--ink-body)}
+.sidebar-status-update:hover{background:linear-gradient(100deg,#fbedd6,#fffdf8)}
 .sidebar-status-update>div{flex:1}
-.sidebar-status-update strong{color:#0f8f5c}
+.sidebar-status-update strong{color:#b87a17}
+.sidebar-status-update small{color:var(--ink-faint)}
 .update-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#f5a623;flex-shrink:0;box-shadow:0 0 0 3px #f5a62322}
 .update-progress{display:flex;flex-direction:column;gap:8px}
-.update-progress-bar{height:10px;border-radius:999px;background:#edf3ef;overflow:hidden}
+.update-progress-bar{height:10px;border-radius:999px;background:var(--surface-sunken);overflow:hidden}
 .update-progress-bar span{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#37c98a,#00b879);transition:width .3s ease}
-.update-progress-meta{display:flex;justify-content:space-between;font-size:11px;color:#8b9e91}
-.update-progress-meta strong{color:#0f8f5c}
+.update-progress-meta{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-muted)}
+.update-progress-meta strong{color:var(--green-strong)}
 .restart-state{display:flex;align-items:center;gap:16px}
 .restart-state>div{min-width:0}
 .restart-state strong{display:block;margin-bottom:6px}
+
+/* 任务行图标按钮：窄屏收紧，移动端独占一行右对齐 */
+@media(max-width:1250px){
+.act-btn{width:30px;height:30px}
+.task-actions{gap:4px}
+}
+@media(max-width:760px){
+.task-row .toggle{order:80;margin-left:auto;margin-top:4px}
+.task-actions{order:81;flex-basis:auto;justify-content:flex-end;gap:6px;margin-top:4px}
+}
+
+/* 任务列表列标题的响应式对齐 */
+@media(max-width:1250px){
+.task-list-header{gap:11px}
+.task-list-header .th-next{display:none}
+}
+@media(max-width:1000px){
+.task-list-header .th-duration{display:none}
+}
+@media(max-width:760px){
+.task-list-header{display:none}
+}
