@@ -52,12 +52,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 $env:GOPROXY = 'https://goproxy.cn,direct'
 ~~~
 
-生成目前支持的四个平台程序：
+生成目前支持的六个平台程序：
 
 ~~~powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -TargetOS windows -TargetArch amd64
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -TargetOS windows -TargetArch arm64 -SkipWeb
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -TargetOS linux -TargetArch amd64 -SkipWeb
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -TargetOS linux -TargetArch arm64 -SkipWeb
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -TargetOS darwin -TargetArch amd64 -SkipWeb
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -TargetOS darwin -TargetArch arm64 -SkipWeb
 ~~~
 
@@ -75,6 +77,8 @@ bash scripts/build.sh
 GOOS=linux GOARCH=amd64 bash scripts/build.sh
 GOOS=linux GOARCH=arm64 bash scripts/build.sh
 GOOS=windows GOARCH=amd64 bash scripts/build.sh
+GOOS=windows GOARCH=arm64 bash scripts/build.sh
+GOOS=darwin GOARCH=amd64 bash scripts/build.sh
 GOOS=darwin GOARCH=arm64 bash scripts/build.sh
 ~~~
 

@@ -1,11 +1,17 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api, usePolling, date, bytes, statusLabel } from '../api'
 import Icon from '../components/Icon.vue'
 import LogPanel from '../components/LogPanel.vue'
 defineEmits(['navigate'])
-const stats = ref({ tasks: 0, running: 0, today: 0, successRate: 0, recent: [], series: [] }), samples = ref([]), loaded = ref(false), selectedRun = ref(null)
+const stats = ref({ tasks: 0, running: 0, today: 0, successRate: 0, recent: [], series: [] }), samples = ref([]), loaded = ref(false), selectedRun = ref(null), missingRuntimes = ref([])
 usePolling(async () => { stats.value = await api('/system/stats'); loaded.value = true; samples.value.push({ cpu: stats.value.cpu || 0, memory: stats.value.memory || 0 }); if (samples.value.length > 36) samples.value.shift() }, 4000)
+onMounted(async () => {
+  try {
+    const list = await api('/system/runtimes')
+    missingRuntimes.value = (list || []).filter(item => !item.available && item.installable && item.name !== 'npm').map(item => item.name)
+  } catch { /* 无权限或离线时静默 */ }
+})
 const cards = computed(() => [
   { name: '任务总数', value: stats.value.tasks, icon: 'ClipboardCheck', tone: 'green', note: '全部自动化任务' },
   { name: '正在运行', value: stats.value.running, icon: 'Play', tone: 'blue', note: (stats.value.queued || 0) + ' 个任务排队中' },
@@ -16,6 +22,7 @@ function line(key) { const values = samples.value; return values.map((item, inde
 const maxRuns = computed(() => Math.max(1, ...stats.value.series.map(item => item.success + item.failed)))
 </script>
 <template>
+  <div v-if="missingRuntimes.length" class="info-banner runtime-banner"><Icon name="Info" /><span>未检测到运行时：<strong>{{ missingRuntimes.join('、') }}</strong>，脚本可能无法运行。</span><button class="small-button" @click="$emit('navigate', 'settings')"><Icon name="Download" :size="15" />去安装</button></div>
   <div class="stats-grid" :class="{ 'loading-content': !loaded }"><section v-for="card in cards" :key="card.name" class="stat-card" :class="card.tone"><div class="stat-top"><span class="stat-icon"><Icon :name="card.icon" :size="23" /></span><span class="stat-caption">{{ card.note }}</span></div><div class="stat-number">{{ loaded ? card.value : '—' }}</div><div class="stat-label">{{ card.name }}</div><div class="stat-decoration" /></section></div>
   <div class="dashboard-middle"><section class="card monitoring"><div class="card-heading"><h2><Icon name="Activity" />实时资源状态</h2><div class="chart-legend"><span><i class="green-dot" />CPU {{ (stats.cpu || 0).toFixed(1) }}%</span><span><i class="blue-dot" />内存 {{ (stats.memory || 0).toFixed(1) }}%</span></div></div><div class="line-chart"><div class="chart-axis"><span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0%</span></div><svg viewBox="0 0 680 180" preserveAspectRatio="none" role="img" aria-label="当前页面打开后的 CPU 与内存实时曲线"><defs><linearGradient id="cpu-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0dc78a" stop-opacity=".22"/><stop offset="100%" stop-color="#0dc78a" stop-opacity=".01"/></linearGradient><linearGradient id="memory-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#319dff" stop-opacity=".16"/><stop offset="100%" stop-color="#319dff" stop-opacity=".01"/></linearGradient></defs><line v-for="position in [0,45,90,135,180]" :key="position" x1="0" x2="680" :y1="position" :y2="position" stroke="#eaf0f3" /><template v-if="samples.length > 1"><polygon :points="'0,180 ' + line('memory') + ' 680,180'" fill="url(#memory-fill)"/><polygon :points="'0,180 ' + line('cpu') + ' 680,180'" fill="url(#cpu-fill)"/><polyline :points="line('memory')" fill="none" stroke="#319dff" stroke-width="2.5" vector-effect="non-scaling-stroke"/><polyline :points="line('cpu')" fill="none" stroke="#0cc58b" stroke-width="2.5" vector-effect="non-scaling-stroke"/></template></svg><span v-if="samples.length < 2" class="chart-wait">正在采集资源数据…</span></div><div class="chart-bottom"><span>页面打开后持续采样</span><span>每 4 秒 / 最新 {{ samples.length }} 个采样点</span></div><div class="resource-strip"><div><Icon name="MemoryStick" /><span>内存使用<strong>{{ bytes(stats.memoryUsed) }} / {{ bytes(stats.memoryTotal) }}</strong></span></div><div><Icon name="HardDrive" /><span>可用磁盘<strong>{{ bytes(stats.diskFree) }}</strong></span></div><div><Icon name="Leaf" /><span>面板堆内存<strong>{{ bytes(stats.heapBytes) }}</strong></span></div></div></section>
     <section class="card completion"><div class="card-heading"><h2>任务完成情况</h2><span class="muted">累计</span></div><div class="ring-row"><div class="donut" :style="{ '--progress': Number(stats.successRate || 0) + '%' }"><div><strong>{{ Number(stats.successRate || 0).toFixed(1) }}<small>%</small></strong><span>执行成功率</span></div></div><div class="ring-legend"><div><i class="green-dot" /><span>执行成功</span><strong>{{ stats.success || 0 }}</strong></div><div><i class="blue-dot" /><span>运行中</span><strong>{{ stats.running || 0 }}</strong></div><div><i class="red-dot" /><span>失败 / 中断</span><strong>{{ stats.failed || 0 }}</strong></div></div></div><div class="week-label">近 7 天执行次数 <span>UTC</span></div><div class="week-chart"><div v-for="day in stats.series" :key="day.date" class="day-bar" :title="day.date + '：成功 ' + day.success + '，失败 ' + day.failed"><div class="bar-track"><i :style="{ height: Math.max(3, (day.success + day.failed) / maxRuns * 64) + 'px' }" /></div><span>{{ day.date.slice(5) }}</span></div></div></section>

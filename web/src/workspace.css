@@ -67,6 +67,14 @@ th.sortable.sorted.asc .sort-arrow{border-top:0;border-bottom:5px solid currentC
 /* 运行环境：版本号与回退提示 */
 .runtime-version{font-size:10px;font-weight:400;color:#6cae87;background:#f0f8f3;border-radius:4px;padding:1px 6px;margin-left:4px}
 .runtime-warn{font-size:10px;color:#c98418;margin-top:3px}
+.runtime-portable{font-size:10px;font-weight:400;color:#2b8ec9;background:#eef7fd;border-radius:4px;padding:1px 6px;margin-left:4px}
+.runtime-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.runtime-actions .button{min-height:30px;padding:6px 11px;font-size:11px}
+.runtime-list>div.runtime-missing code{color:#c98418}
+.runtime-progress{padding:0 25px 18px}
+.runtime-progress .update-progress{margin:0}
+.runtime-banner{margin-bottom:16px;align-items:center}
+.runtime-banner .small-button{margin-left:auto;flex-shrink:0}
 
 /* 通知公告弹层 */
 .notice-modal{max-width:560px}

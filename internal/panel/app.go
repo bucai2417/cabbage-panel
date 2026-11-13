@@ -40,6 +40,12 @@ type App struct {
 	attempts                                   map[string][]time.Time
 	client                                     *http.Client
 	started                                    time.Time
+	updateMu                                   sync.Mutex
+	updateState                                UpdateProgress
+	runtimeMu                                  sync.Mutex
+	runtimeState                               RuntimeProgress
+	shutdown                                   chan struct{}
+	shutdownOnce                               sync.Once
 }
 
 func New(root, version, commit, updateKey string) (*App, error) {
@@ -51,7 +57,7 @@ func New(root, version, commit, updateKey string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &App{store: store, root: absolute, version: version, commit: commit, updateKey: updateKey, attempts: map[string][]time.Time{}, client: &http.Client{Timeout: 45 * time.Second}, started: time.Now()}
+	app := &App{store: store, root: absolute, version: version, commit: commit, updateKey: updateKey, attempts: map[string][]time.Time{}, client: &http.Client{Timeout: 45 * time.Second}, started: time.Now(), shutdown: make(chan struct{})}
 	app.helperKey = randomToken()
 	for _, dir := range []string{"scripts", "logs", "config", "backups", "repos", "packages", "bin", "updates", "debug"} {
 		if err := os.MkdirAll(filepath.Join(absolute, dir), 0700); err != nil {
@@ -97,6 +103,21 @@ func New(root, version, commit, updateKey string) (*App, error) {
 
 func (app *App) Close() { app.engine.close(); app.store.close() }
 
+// RequestShutdown 请求优雅停止 HTTP 服务；由更新流程在替换程序后调用。
+func (app *App) RequestShutdown() {
+	app.shutdownOnce.Do(func() { close(app.shutdown) })
+}
+
+// scheduleShutdown 延迟触发关闭，留出时间把 HTTP 响应写回给前端。
+func (app *App) scheduleShutdown(delay time.Duration) {
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		<-timer.C
+		app.RequestShutdown()
+	}()
+}
+
 func (app *App) Serve(ctx context.Context, addr string) error {
 	server := &http.Server{Addr: addr, Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 90 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	listener, err := net.Listen("tcp", addr)
@@ -114,15 +135,18 @@ func (app *App) Serve(ctx context.Context, addr string) error {
 	log.Printf("大白菜面板 v%s 已启动 http://localhost%s，MCP: /mcp，数据目录: %s", app.version, addr, app.root)
 	app.pruneSystemLog()
 	app.appendSystemLog("info", "[boot] 大白菜面板 v"+app.version+" 已启动 http://localhost"+addr)
+	app.reportMissingRuntimes()
 	finished := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			_ = server.Shutdown(shutdown)
+		case <-app.shutdown:
 		case <-finished:
+			return
 		}
+		shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdown)
 	}()
 	err = server.Serve(listener)
 	close(finished)
@@ -313,6 +337,11 @@ func (app *App) Handler() http.Handler {
 			// 重建 Python 环境需要独占 gate 写锁，必须在读锁之前处理。
 			if apiPath == "/system/python/rebuild" {
 				app.pythonRebuildAPI(writer, request)
+				return
+			}
+			// 安装运行时会替换 data/packages/runtime，同样需要独占写锁。
+			if apiPath == "/system/runtimes/install" {
+				app.runtimeInstallAPI(writer, request)
 				return
 			}
 			app.gate.RLock()

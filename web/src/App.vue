@@ -13,7 +13,7 @@ import ApiDocs from './pages/ApiDocs.vue'
 import Settings from './pages/Settings.vue'
 
 const ready = ref(false), loggedIn = ref(false), initialized = ref(true), busy = ref(false), error = ref('')
-const user = ref(''), version = ref('1.1.0'), menuOpen = ref(false), globalSearch = ref('')
+const user = ref(''), version = ref(''), menuOpen = ref(false), globalSearch = ref(''), updateInfo = ref(null), settingsTab = ref('')
 // 公告弹层：异步加载，失败静默跳过，不影响主界面。
 const noticeOpen = ref(false), noticeText = ref(''), noticeLoading = ref(false), noticeLoaded = ref(false)
 async function openNotice() {
@@ -128,6 +128,10 @@ async function onHash() {
   }
 }
 function expired() { loggedIn.value = false; login.value.password = ''; error.value = '登录已过期，请重新登录' }
+let updateTimer = null
+async function checkUpdateHint() { if (!loggedIn.value) return; try { updateInfo.value = await api('/system/update') } catch { /* 未配置仓库或离线时静默忽略 */ } }
+async function openUpdate() { settingsTab.value = 'update'; await navigate('settings') }
+watch(loggedIn, value => { if (value) checkUpdateHint() })
 function keyboard(event) { if ((event.ctrlKey || event.metaKey) && event.key === 'k') { event.preventDefault(); document.querySelector('#global-search')?.focus() } }
 async function bootstrap() {
   try {
@@ -150,9 +154,11 @@ onMounted(async () => {
   restoreRemember()
   await nextTick()
   await bootstrap()
+  if (loggedIn.value) checkUpdateHint()
+  updateTimer = setInterval(() => { if (loggedIn.value) checkUpdateHint() }, 30 * 60 * 1000)
   window.addEventListener('hashchange', onHash); window.addEventListener('session-expired', expired); window.addEventListener('keydown', keyboard)
 })
-onUnmounted(() => { window.removeEventListener('hashchange', onHash); window.removeEventListener('session-expired', expired); window.removeEventListener('keydown', keyboard) })
+onUnmounted(() => { if (updateTimer) clearInterval(updateTimer); window.removeEventListener('hashchange', onHash); window.removeEventListener('session-expired', expired); window.removeEventListener('keydown', keyboard) })
 </script>
 
 <template>
@@ -168,7 +174,7 @@ onUnmounted(() => { window.removeEventListener('hashchange', onHash); window.rem
     <div v-if="menuOpen" class="sidebar-scrim" @click="menuOpen = false" />
     <aside class="sidebar" :class="{ open: menuOpen }"><a class="brand" href="#dashboard" @click="navigate('dashboard')"><img src="/logo.png" alt="" /><div>大白菜面板<small>CABBAGE PANEL</small></div></a>
       <div class="nav-caption">工作空间</div><nav aria-label="主导航"><button v-for="item in navigation" :key="item.id" :class="{ active: page === item.id }" :aria-current="page === item.id ? 'page' : undefined" @click="navigate(item.id)"><Icon :name="item.icon" /><span>{{ item.label }}</span><span v-if="page === item.id" class="nav-dot" /></button></nav>
-      <div class="sidebar-bottom"><div class="sidebar-status"><span class="live-dot" /><div><strong>服务已连接</strong><small>v{{ version }} · 本地数据</small></div></div></div>
+      <div class="sidebar-bottom"><button v-if="updateInfo && updateInfo.available" type="button" class="sidebar-status sidebar-status-update" @click="openUpdate" :title="'发现新版本 v' + updateInfo.latest + '，点击更新'"><span class="update-dot" /><div><strong>发现新版本 v{{ updateInfo.latest }}</strong><small>当前 v{{ version }} · 点击更新</small></div></button><div v-else class="sidebar-status"><span class="live-dot" /><div><strong>服务已连接</strong><small>v{{ version }} · 本地数据</small></div></div></div>
     </aside>
     <div class="main-shell"><header class="topbar"><button class="icon-button mobile-menu" aria-label="打开导航" @click="menuOpen = !menuOpen"><Icon name="Menu" /></button><form class="global-search" @submit.prevent="navigate('tasks')"><Icon name="Search" /><input id="global-search" v-model="globalSearch" placeholder="搜索任务、命令、关键词…" aria-label="搜索任务" /><kbd>Ctrl K</kbd></form><div class="topbar-right"><span class="topbar-date">{{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }) }}</span><button class="icon-button" title="查看通知" aria-label="查看通知" @click="openNotice"><Icon name="Bell" /></button><div class="user-avatar">{{ user.slice(0, 1).toUpperCase() }}</div><span class="user-name">{{ user }}</span><button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><Icon name="LogOut" :size="17" /></button></div></header>
       <main>
@@ -178,7 +184,7 @@ onUnmounted(() => { window.removeEventListener('hashchange', onHash); window.rem
         <Logs v-else-if="page === 'logs'" />
         <Resources v-else-if="['envs', 'subscriptions', 'dependencies'].includes(page)" :key="page" :kind="page" />
         <ApiDocs v-else-if="page === 'api-docs'" @navigate="navigate" />
-        <Settings v-else-if="page === 'settings'" :version="version" />
+        <Settings v-else-if="page === 'settings'" :version="version" :focus-tab="settingsTab" @consume-tab="settingsTab = ''" />
       </main><footer class="page-footer"><span>大白菜面板 <span class="footer-dot">·</span> 让自动化回归简单</span><span>Go + Vue · SQLite</span></footer>
     </div>
   </div>

@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -17,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ReleaseAsset struct {
@@ -38,6 +40,31 @@ type UpdateAsset struct {
 type UpdateManifest struct {
 	Version string        `json:"version"`
 	Assets  []UpdateAsset `json:"assets"`
+}
+
+// UpdateProgress 是后台下载更新的实时状态快照，供前端轮询显示真实进度。
+type UpdateProgress struct {
+	Running  bool   `json:"running"`
+	Done     bool   `json:"done"`
+	Phase    string `json:"phase"`
+	Version  string `json:"version"`
+	Received int64  `json:"received"`
+	Total    int64  `json:"total"`
+	Percent  int    `json:"percent"`
+	Message  string `json:"message"`
+	Error    string `json:"error"`
+}
+
+func (app *App) reportUpdateProgress(mutate func(*UpdateProgress)) {
+	app.updateMu.Lock()
+	mutate(&app.updateState)
+	app.updateMu.Unlock()
+}
+
+func (app *App) currentUpdateProgress() UpdateProgress {
+	app.updateMu.Lock()
+	defer app.updateMu.Unlock()
+	return app.updateState
 }
 
 func newerVersion(candidate, current string) bool {
@@ -133,6 +160,49 @@ func (app *App) fetchBytes(ctx context.Context, address string, limit int64) ([]
 	return data, nil
 }
 
+// fetchBytesProgress 在下载过程中按块回调已接收字节与总长度，用于展示真实进度。
+func (app *App) fetchBytesProgress(ctx context.Context, address string, limit int64, onProgress func(received, total int64)) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, "GET", address, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := app.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		return nil, fmt.Errorf("下载失败 HTTP %d", response.StatusCode)
+	}
+	total := response.ContentLength
+	if onProgress != nil {
+		onProgress(0, total)
+	}
+	var buffer bytes.Buffer
+	chunk := make([]byte, 64*1024)
+	var received int64
+	for {
+		read, readErr := response.Body.Read(chunk)
+		if read > 0 {
+			received += int64(read)
+			if received > limit {
+				return nil, errors.New("下载文件超过大小上限")
+			}
+			buffer.Write(chunk[:read])
+			if onProgress != nil {
+				onProgress(received, total)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	return buffer.Bytes(), nil
+}
+
 func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tail string) {
 	if tail == "" && request.Method == "GET" {
 		release, err := app.latestRelease(request.Context())
@@ -140,7 +210,11 @@ func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tai
 			apiError(writer, err)
 			return
 		}
-		ok(writer, Object{"current": app.version, "latest": release.Tag, "available": newerVersion(release.Tag, app.version), "body": release.Body, "url": release.URL, "signedUpdates": app.updateKey != "", "staged": app.store.setting("stagedVersion", "")})
+		ok(writer, Object{"current": app.version, "latest": release.Tag, "available": newerVersion(release.Tag, app.version), "body": release.Body, "url": release.URL, "signedUpdates": app.updateKey != "", "staged": app.store.setting("stagedVersion", ""), "restartMode": restartMode()})
+		return
+	}
+	if tail == "/progress" && request.Method == "GET" {
+		ok(writer, app.currentUpdateProgress())
 		return
 	}
 	if tail == "/download" && request.Method == "POST" {
@@ -148,26 +222,31 @@ func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tai
 			fail(writer, 409, "当前构建未嵌入发布公钥；请先按发布文档配置签名构建")
 			return
 		}
-		items, _ := app.store.list("updates")
-		var id int64
-		for _, item := range items {
-			id = integer(item["id"])
-			break
-		}
-		if id == 0 {
-			item, err := app.store.save("updates", Object{"name": "下载并验证版本更新", "timeout": 600})
-			if err != nil {
-				apiError(writer, err)
-				return
-			}
-			id = integer(item["id"])
-		}
-		job, err := app.engine.enqueue("updates", id)
-		if err != nil {
-			apiError(writer, err)
+		if app.currentUpdateProgress().Running {
+			fail(writer, 409, "已有更新正在下载，请稍候")
 			return
 		}
-		ok(writer, job)
+		app.reportUpdateProgress(func(state *UpdateProgress) {
+			*state = UpdateProgress{Running: true, Phase: "准备下载"}
+		})
+		go func() {
+			err := app.stageUpdate(context.Background(), io.Discard)
+			app.reportUpdateProgress(func(state *UpdateProgress) {
+				state.Running = false
+				state.Done = true
+				if err != nil {
+					state.Phase = "失败"
+					state.Error = err.Error()
+					return
+				}
+				state.Phase = "完成"
+				state.Percent = 100
+				if state.Version == "" {
+					state.Version = strings.TrimPrefix(app.store.setting("stagedVersion", ""), "v")
+				}
+			})
+		}()
+		ok(writer, Object{"started": true})
 		return
 	}
 	if tail == "/apply" && request.Method == "POST" {
@@ -201,33 +280,33 @@ func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tai
 			fail(writer, 400, "暂存文件校验失败，请重新下载")
 			return
 		}
-		next := executable + ".next"
-		if err := atomicWrite(next, data); err != nil {
-			apiError(writer, err)
-			return
-		}
-		if err := os.Chmod(next, 0755); err != nil {
-			apiError(writer, err)
-			return
-		}
-		previous := executable + ".previous"
-		if _, err := os.Stat(previous); err == nil {
-			if err := os.Remove(previous); err != nil {
+		restartLabel := "服务将自动重启并加载新版本"
+		if inContainer() || underSystemd() {
+			if err := inPlaceReplace(executable, data); err != nil {
+				if inContainer() {
+					fail(writer, 500, "容器内替换程序失败："+err.Error()+"；请在宿主机拉取新镜像后重建容器")
+				} else {
+					fail(writer, 500, "替换程序失败："+err.Error()+"；请确认服务用户对程序目录有写权限")
+				}
+				return
+			}
+			if inContainer() {
+				restartLabel = "已在容器内替换程序，服务将退出并依赖容器 restart 策略重启"
+			} else {
+				restartLabel = "已替换程序，服务将退出并由 systemd 重新拉起（需 Restart=always）"
+			}
+		} else {
+			message, err := nativeRestart(executable, data, os.Args[1:])
+			if err != nil {
 				apiError(writer, err)
 				return
 			}
+			restartLabel = message
 		}
-		if err := os.Rename(executable, previous); err != nil {
-			apiError(writer, err)
-			return
-		}
-		if err := os.Rename(next, executable); err != nil {
-			_ = os.Rename(previous, executable)
-			apiError(writer, err)
-			return
-		}
+		_ = os.Remove(staged)
 		_ = app.store.setSetting("stagedVersion", "")
-		ok(writer, Object{"version": version, "restartRequired": true, "message": "已替换程序，重启服务后生效；旧程序保存为 .previous"})
+		ok(writer, Object{"version": version, "restartRequired": false, "restarting": true, "mode": restartMode(), "message": restartLabel})
+		app.scheduleShutdown(600 * time.Millisecond)
 		return
 	}
 	fail(writer, 404, "更新接口不存在")
@@ -238,6 +317,7 @@ func (app *App) stageUpdate(ctx context.Context, writer io.Writer) error {
 	if err != nil || len(key) != ed25519.PublicKeySize {
 		return errors.New("发布公钥无效")
 	}
+	app.reportUpdateProgress(func(state *UpdateProgress) { state.Phase = "检查最新版本" })
 	release, err := app.latestRelease(ctx)
 	if err != nil {
 		return err
@@ -245,6 +325,7 @@ func (app *App) stageUpdate(ctx context.Context, writer io.Writer) error {
 	if !newerVersion(release.Tag, app.version) {
 		return errors.New("当前已经是最新稳定版本")
 	}
+	app.reportUpdateProgress(func(state *UpdateProgress) { state.Phase = "下载签名清单" })
 	manifestURL, err := releaseURL(release, "manifest.json")
 	if err != nil {
 		return err
@@ -261,6 +342,7 @@ func (app *App) stageUpdate(ctx context.Context, writer io.Writer) error {
 	if err != nil {
 		return err
 	}
+	app.reportUpdateProgress(func(state *UpdateProgress) { state.Phase = "校验发布签名" })
 	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(signatureData)))
 	if err != nil || !ed25519.Verify(key, manifestData, signature) {
 		return errors.New("Release 签名校验失败，更新已拒绝")
@@ -279,10 +361,26 @@ func (app *App) stageUpdate(ctx context.Context, writer io.Writer) error {
 				return err
 			}
 			fmt.Fprintln(writer, "下载", asset.Name)
-			data, err := app.fetchBytes(ctx, address, 128<<20)
+			app.reportUpdateProgress(func(state *UpdateProgress) {
+				state.Phase = "下载程序"
+				state.Version = manifest.Version
+				state.Received = 0
+				state.Total = 0
+				state.Percent = 0
+			})
+			data, err := app.fetchBytesProgress(ctx, address, 128<<20, func(received, total int64) {
+				app.reportUpdateProgress(func(state *UpdateProgress) {
+					state.Received = received
+					state.Total = total
+					if total > 0 {
+						state.Percent = int(received * 100 / total)
+					}
+				})
+			})
 			if err != nil {
 				return err
 			}
+			app.reportUpdateProgress(func(state *UpdateProgress) { state.Phase = "校验程序文件"; state.Percent = 100 })
 			digest := sha256.Sum256(data)
 			if !strings.EqualFold(hex.EncodeToString(digest[:]), asset.SHA256) {
 				return errors.New("程序 SHA-256 校验失败")

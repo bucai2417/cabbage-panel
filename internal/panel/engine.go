@@ -381,8 +381,6 @@ func (engine *Engine) execute(job *Job) {
 			err = engine.app.installDependency(ctx, job.Item, writer)
 		case "subscriptions":
 			err = engine.app.syncSubscription(ctx, job.Item, writer)
-		case "updates":
-			err = engine.app.stageUpdate(ctx, writer)
 		default:
 			err = engine.app.runTask(ctx, job.Item, job.Command, writer, job)
 		}
@@ -461,13 +459,16 @@ func (app *App) venvPython() string {
 
 func (app *App) hasVenv() bool { return app.venvPython() != "" }
 
-// resolvePythonBase 找到「基础 Python」：配置路径 > 配置版本号 > 自动检测。
+// resolvePythonBase 找到「基础 Python」：配置路径 > 便携运行时 > 配置版本号 > 自动检测。
 // 配置项无效时静默回退，避免一个坏配置让所有脚本都跑不起来。
 func (app *App) resolvePythonBase() string {
 	if path := strings.TrimSpace(app.store.setting("pythonPath", "")); path != "" {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			return path
 		}
+	}
+	if portable := app.portablePython(); portable != "" {
+		return portable
 	}
 	if version := strings.TrimSpace(app.store.setting("pythonVersion", "")); version != "" {
 		// 先找带版本的命令（python3.11），再回落到通用名。
@@ -489,6 +490,9 @@ func (app *App) pythonSource(ctx context.Context) string {
 		}
 		return "configured-fallback"
 	}
+	if app.portablePython() != "" {
+		return "portable"
+	}
 	if version := strings.TrimSpace(app.store.setting("pythonVersion", "")); version != "" {
 		actual := pythonVersion(ctx, app.resolvePythonBase())
 		if strings.HasPrefix(actual, version+".") || actual == version {
@@ -498,6 +502,19 @@ func (app *App) pythonSource(ctx context.Context) string {
 	}
 	return "system"
 }
+// shell 返回实际可用的 Shell：CABBAGE_BASH > 便携 Git bash > 系统 Git bash > LookPath。
+func (app *App) shell() string {
+	if value := strings.TrimSpace(os.Getenv("CABBAGE_BASH")); value != "" {
+		if _, err := os.Stat(value); err == nil {
+			return value
+		}
+	}
+	if bash := app.portableBash(); bash != "" {
+		return bash
+	}
+	return findShell()
+}
+
 func findShell() string {
 	if runtime.GOOS == "windows" {
 		for _, location := range []string{os.Getenv("CABBAGE_BASH"), "C:/Program Files/Git/bin/bash.exe", "D:/Git/bin/bash.exe"} {
@@ -548,6 +565,10 @@ func (app *App) environment() []string {
 	app.helperMu.RUnlock()
 	values["CABBAGE_NOTIFY_TOKEN"] = app.helperKey
 	values["PATH"] = filepath.Join(app.root, "bin") + string(os.PathListSeparator) + values["PATH"]
+	// 便携运行时优先：Python → Node → Git，仅注入真实存在的目录。
+	for _, dir := range app.portableBins() {
+		values["PATH"] = dir + string(os.PathListSeparator) + values["PATH"]
+	}
 	// 一次求值，避免重复 LookPath；venv 优先，其次配置的基础 Python。
 	base := app.resolvePythonBase()
 	current := base
@@ -556,6 +577,8 @@ func (app *App) environment() []string {
 		values["PATH"] = filepath.Dir(venv) + string(os.PathListSeparator) + values["PATH"]
 	}
 	values["CABBAGE_PYTHON"] = filepath.ToSlash(current)
+	// task 助手执行 .sh 时使用此解释器；未设置时回退 bash，与旧行为一致。
+	values["CABBAGE_SHELL"] = filepath.ToSlash(app.shell())
 	if base != findPython() {
 		values["PATH"] = filepath.Dir(base) + string(os.PathListSeparator) + values["PATH"]
 	}
@@ -628,7 +651,7 @@ func (app *App) runTask(ctx context.Context, item Object, command string, writer
 		builder.WriteString("if [ -f \"$CABBAGE_DATA/config/task_after.sh\" ]; then . \"$CABBAGE_DATA/config/task_after.sh\"; fi\n")
 	}
 	builder.WriteString("exit $cabbage_exit")
-	return app.processWithStdin(ctx, workDir, writer, job, findShell(), "-c", builder.String())
+	return app.processWithStdin(ctx, workDir, writer, job, app.shell(), "-c", builder.String())
 }
 func (app *App) installHelpers() error {
 	// task 助手：统一 task 前缀，按后缀选解释器，支持 now / conc / desi 子命令。
@@ -639,7 +662,9 @@ func (app *App) installHelpers() error {
 }
 
 // taskHelperSource 是随版本内置的 task 命令脚本。
-const taskHelperSource = `#!/usr/bin/env bash
+// taskHelperSource 用 POSIX sh 语法编写，兼容 bash 与 MinGit 的 usr/bin/sh.exe。
+// 不使用 mapfile、seq、进程替换等 bash 专有特性，便携 Git 安装后即可独立提供 Shell。
+const taskHelperSource = `#!/bin/sh
 # 大白菜面板 task 助手。
 #   task <脚本>                  依次执行
 #   task <脚本> now              立即执行（忽略随机延迟），前台输出日志
@@ -669,13 +694,24 @@ if [ $# -gt 0 ]; then
   esac
 fi
 
-# 按后缀选择解释器；输出「程序名」或空（空表示 shell 脚本，需要 source 语义）。
+# 按后缀选择解释器；输出「程序路径」或空（空表示不支持的类型）。
 pick_program() {
   case "$1" in
     *.py) printf '%s' "${CABBAGE_PYTHON:-python3}" ;;
     *.js|*.mjs|*.cjs|*.ts|*.mts|*.cts) printf 'node' ;;
-    *.sh) printf 'bash' ;;
+    *.sh) printf '%s' "${CABBAGE_SHELL:-bash}" ;;
     *) printf '' ;;
+  esac
+}
+
+# 判断解释器是否为 shell（shell 不能带 -u 参数）。
+# 用参数展开取文件名，避免依赖 basename 处理 Windows 反斜杠路径。
+is_shell() {
+  local name="${1##*/}"
+  name="${name##*\\}"
+  case "$name" in
+    bash|bash.exe|sh|sh.exe|dash|dash.exe|zsh|ksh|ash) return 0 ;;
+    *) return 1 ;;
   esac
 }
 
@@ -691,8 +727,8 @@ run_one() {
   fi
   if [ "$program" = "node" ]; then
     exec node "$file" "$@"
-  elif [ "$program" = "bash" ]; then
-    exec bash "$file" "$@"
+  elif is_shell "$program"; then
+    exec "$program" "$file" "$@"
   else
     exec "$program" -u "$file" "$@"
   fi
@@ -737,7 +773,11 @@ case "$mode" in
       exit 1
     fi
     env_name="$1"; shift
-    mapfile -t accounts < <(split_env "$env_name")
+    # 用逐行读取代替 mapfile + 进程替换，兼容 MinGit 的 POSIX sh（无 mapfile / seq）。
+    accounts=()
+    while IFS= read -r line; do accounts+=("$line"); done <<EOF
+$(split_env "$env_name")
+EOF
     if [ ${#accounts[@]} -eq 0 ]; then
       echo "环境变量 $env_name 为空，无法并发执行" >&2
       exit 1
@@ -745,9 +785,14 @@ case "$mode" in
     # 未指定序号时跑全部。
     indexes=()
     if [ $# -gt 0 ]; then
-      mapfile -t indexes < <(echo "$(expand_indexes "$*")" | tr ' ' '\n' | awk 'NF && !seen[$0]++')
+      while IFS= read -r line; do
+        [ -n "$line" ] && indexes+=("$line")
+      done <<EOF
+$(expand_indexes "$*" | tr ' ' '\n' | awk 'NF && !seen[$0]++')
+EOF
     else
-      for i in $(seq 1 ${#accounts[@]}); do indexes+=("$i"); done
+      i=1
+      while [ "$i" -le ${#accounts[@]} ]; do indexes+=("$i"); i=$((i + 1)); done
     fi
     pids=()
     for idx in "${indexes[@]}"; do
@@ -775,8 +820,16 @@ case "$mode" in
       exit 1
     fi
     env_name="$1"; shift
-    mapfile -t accounts < <(split_env "$env_name")
-    mapfile -t indexes < <(echo "$(expand_indexes "$*")" | tr ' ' '\n' | awk 'NF && !seen[$0]++')
+    accounts=()
+    while IFS= read -r line; do accounts+=("$line"); done <<EOF
+$(split_env "$env_name")
+EOF
+    indexes=()
+    while IFS= read -r line; do
+      [ -n "$line" ] && indexes+=("$line")
+    done <<EOF
+$(expand_indexes "$*" | tr ' ' '\n' | awk 'NF && !seen[$0]++')
+EOF
     exit_code=0
     for idx in "${indexes[@]}"; do
       if ! [ "$idx" -ge 1 ] 2>/dev/null || [ "$idx" -gt ${#accounts[@]} ]; then

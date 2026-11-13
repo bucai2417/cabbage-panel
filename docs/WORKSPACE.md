@@ -105,6 +105,16 @@ JavaScript（CommonJS）：
 
 设置页「登录日志」只展示登录记录，字段与青龙 `GET /api/user/login-log` 一致：登录时间、登录地址、登录 IP、登录设备和登录状态（成功/失败），最多保留最近 100 条。本机与内网地址标注为「内网IP」。反向代理部署时，如果直连地址是本机或内网，会优先读取 X-Forwarded-For / X-Real-IP。
 
+## 运行环境与运行时安装
+
+「设置 → 常规设置 → 运行环境」检测 Python、Node.js、npm、Git 和 Shell，显示版本、路径和来源徽标：`可用`（系统）、`便携运行时`（面板内置）、`自定义路径` / `自定义版本`（配置生效）。Python 可填解释器绝对路径或版本号（如 3.11），保存后点「重建 Python 环境」生效，重建会备份旧 venv、失败回滚、成功后自动重装 Python 依赖。
+
+缺失且当前平台可安装的运行时行会显示「安装」按钮。点击后从官方源下载便携包（默认走 npmmirror 镜像：Python 来自 python-build-standalone，Node 来自 Node 镜像），下载进度以进度条显示，支持断点续传，随后用内置 SHA-256 校验、安全解压并原子替换 `data/packages/runtime/<名称>`；安装期间不能运行脚本，安装后无需重启即可被脚本使用。Windows 的 Git 使用 MinGit 便携包；Linux / macOS 的 Git 通过 micromamba 装入隔离前缀（首次额外下载约 7–9 MB，并会拉取 conda-forge 依赖），不需要 root。同一区域下方可配置下载基址与 conda 频道覆盖默认源，包内容仍强制校验。仪表盘在检测到缺失运行时会显示提示横幅，点击可跳转到设置页。
+
+Python 与 Node 的便携包覆盖 Windows / Linux / macOS 的 amd64 与 arm64。`.sh` 脚本使用当前生效的 Shell（优先便携 Git 的 bash 或 sh），因此只装便携 Git 的机器也能运行 Shell 脚本。
+
+容器部署不支持就地安装运行时，请使用预装运行时的镜像；Linux 无内置资产时通过 apt/apk 安装系统包，macOS 通过 Homebrew。
+
 ## 版本与发布
 
 当前版本 v1.0.0，默认仓库 bucai2417/cabbage-panel。此次仅生成本地代码与发行包，没有创建 Git 提交、推送、GitHub Release 或线上部署。真实在线更新仍要求 Release 签名公钥和签名清单，参见 RELEASE.md。

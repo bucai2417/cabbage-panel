@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true", "npmMirror": "", "pythonMirror": "", "linuxMirror": "", "pythonPath": "", "pythonVersion": ""}
+var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true", "npmMirror": "", "pythonMirror": "", "linuxMirror": "", "pythonPath": "", "pythonVersion": "", "runtimePythonMirror": "", "runtimeNodeMirror": "", "runtimeGitMirror": "", "runtimeMambaMirror": "", "runtimeMambaChannel": ""}
 
 func (app *App) settings() Object {
 	result := Object{}
@@ -52,9 +52,14 @@ func (app *App) saveSettings(body Object) error {
 			if text(value) != "true" && text(value) != "false" {
 				return errors.New("notifyFailures 只能为 true 或 false")
 			}
-		case "npmMirror", "pythonMirror", "linuxMirror":
+		case "npmMirror", "pythonMirror", "linuxMirror", "runtimePythonMirror", "runtimeNodeMirror", "runtimeGitMirror", "runtimeMambaMirror":
 			if address := strings.TrimSpace(text(value)); address != "" && !validHTTP(address) {
 				return errors.New("镜像地址必须是无内嵌凭证的 HTTP(S) URL")
+			}
+		case "runtimeMambaChannel":
+			// conda 频道：空表示 conda-forge；非空必须是合法 URL，便于指向国内镜像。
+			if address := strings.TrimSpace(text(value)); address != "" && !validHTTP(address) {
+				return errors.New("conda 频道必须是无内嵌凭证的 HTTP(S) URL")
 			}
 		case "pythonPath":
 			// 留空表示自动检测；非空必须是存在的文件。

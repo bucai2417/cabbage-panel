@@ -123,8 +123,10 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | POST /api/user/logout | 撤销当前会话 |
 | GET / PUT /api/user | 账号查询 / 修改，修改需要 oldPassword |
 | GET /api/system/stats | 真实资源、统计和最近任务 |
-| GET /api/system/runtimes | Python/Node/Bash/Git/npm 检测 |
-| GET / PUT /api/system/settings | concurrency/timeout/retentionDays/githubRepo/webhookURL/notifyFailures/npmMirror/pythonMirror/linuxMirror/pythonPath/pythonVersion |
+| GET /api/system/runtimes | Python/Node/Bash/Git/npm 检测，含来源与可安装标记 |
+| POST /api/system/runtimes/install | {name} 一键安装便携运行时；容器内或有任务运行时返回 409 |
+| GET /api/system/runtimes/progress | 运行时安装进度 |
+| GET / PUT /api/system/settings | concurrency/timeout/retentionDays/githubRepo/webhookURL/notifyFailures/npmMirror/pythonMirror/linuxMirror/pythonPath/pythonVersion/runtimePythonMirror/runtimeNodeMirror/runtimeGitMirror/runtimeMambaMirror/runtimeMambaChannel |
 | POST /api/system/python/rebuild | 用当前配置的 Python 重建 venv 并重装 Python 依赖；有任务运行时返回 409 |
 | GET / PUT / DELETE /api/user/ip-blacklist | IP 黑名单：GET 列表、PUT {ip} 添加、DELETE {ip} 移除；命中后无法登录 |
 | PUT /api/system/cleanup | 清理过期日志 |
@@ -177,17 +179,43 @@ GET /crons 默认把启用任务排在禁用任务前，组内置顶优先，其
 
 ## Python 运行时
 
-**依赖不随程序打包**：二进制只嵌入前端，Python 依赖装在 `data/packages/venv`（独立 venv），Node 依赖装在 `data/packages/node_modules`，运行脚本需要宿主机提供 Python 与 Node。
+**依赖不随程序打包**：二进制只嵌入前端，Python 依赖装在 `data/packages/venv`（独立 venv），Node 依赖装在 `data/packages/node_modules`。运行脚本需要宿主机或**面板内置便携运行时**提供 Python 与 Node。
 
 解释器解析优先级（`resolvePythonBase`）：
 
 1. `pythonPath` — 绝对路径，必须存在且是文件
-2. `pythonVersion` — 形如 `3.10`，按 `python3.10` → `python3` → `python` 顺序查找
-3. 自动检测 — `python3` → `python`
+2. 便携运行时 — `data/packages/runtime/Python`（通过设置页一键安装）
+3. `pythonVersion` — 形如 `3.10`，按 `python3.10` → `python3` → `python` 顺序查找
+4. 自动检测 — `python3` → `python`
 
 已有 venv 时优先使用 venv 内的解释器。修改配置后必须调用 `POST /api/system/python/rebuild` 重建 venv 才生效；重建会先备份旧环境，失败自动回滚，成功后自动重装所有 `type=1` 的依赖。
 
-`GET /api/system/runtimes` 的 Python 项额外返回：`version`（如 `3.10.9`）、`source`（`system` / `configured-path` / `configured-version` / `configured-fallback`）、`configuredPath`、`configuredVersion`。配置项无效时 `source` 为 `configured-fallback`，表示已回退到系统默认。
+`GET /api/system/runtimes` 返回稳定顺序的 `Python / Node.js / npm / Git / Shell`，每项字段：`name`、`available`、`path`、`version`、`source`（`portable` / `system` / `configured-path` / `configured-version` / `configured-fallback`）、`installable`（当前平台能否自动安装）、`installHint`（无内置资产时给出的引导命令）。Python 项额外返回 `configuredPath`、`configuredVersion`。
+
+## 运行时一键安装
+
+| 接口 | 说明 |
+| --- | --- |
+| POST /api/system/runtimes/install | `{name}`，name 取 `Python` / `Node.js` / `Git`；后台下载安装，立即返回 `{started:true}`；容器内、有任务运行中、已有安装进行中均返回 409 |
+| GET /api/system/runtimes/progress | 安装进度：`running`、`done`、`runtime`、`phase`、`received`、`total`、`percent`、`message`、`error` |
+
+安装流程：下载便携包 → 用内置 SHA-256 校验 → 安全解压（拒绝路径穿越、符号链接与硬链接）→ 持有独占锁原子替换 `data/packages/runtime/<name>`，失败回滚旧目录。Python 安装成功后若尚无 venv 会自动创建；创建失败只记警告，不判整个安装失败。
+
+下载地址可用设置项覆盖，包内容仍强制校验：
+
+| 设置键 | 默认源 |
+| --- | --- |
+| runtimePythonMirror | npmmirror `python-build-standalone` |
+| runtimeNodeMirror | npmmirror Node 镜像 |
+| runtimeGitMirror | npmmirror `git-for-windows`（Windows MinGit） |
+| runtimeMambaMirror | GitHub `mamba-org/micromamba-releases`（Linux/macOS 装 Git） |
+| runtimeMambaChannel | 空表示 `conda-forge`，可填国内 conda 镜像 URL |
+
+默认源统一走 npmmirror（国内可达，字节与 GitHub 上游一致，指纹已核对）；可在设置页改回 GitHub 或其他镜像。下载支持 HTTP Range 续传与自动重试，避免大包在弱网中途断开。
+
+平台覆盖：Python 与 Node 在 `windows/linux/darwin` × `amd64/arm64` 六个组合都有便携包。Git 在 Windows 用 MinGit；在 Linux / macOS 下载 micromamba（约 7–9 MB）后执行 `micromamba create -p data/packages/runtime/Git git=2.56.1`，把 Git 装进隔离前缀，无需 root、不写系统目录，但会一并拉取 conda-forge 依赖。容器环境不就地安装。
+
+Linux 无内置资产时通过 apt/apk/dnf/yum 安装系统包，macOS 通过 Homebrew；两者都需要相应权限。容器环境不就地安装，请改用预装运行时的镜像。
 
 ## 依赖缺失自动安装
 

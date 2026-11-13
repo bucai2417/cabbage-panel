@@ -76,20 +76,11 @@ func (app *App) systemAPI(writer http.ResponseWriter, request *http.Request, tai
 		return
 	}
 	if tail == "runtimes" && request.Method == "GET" {
-		result := []Object{}
-		for name, program := range map[string]string{"Python": app.python(), "Node.js": "node", "Shell": findShell(), "Git": "git", "npm": "npm"} {
-			location, err := exec.LookPath(program)
-			entry := Object{"name": name, "available": err == nil, "path": location}
-			if name == "Python" {
-				// 补充版本与来源，供设置页展示实际生效的解释器。
-				entry["version"] = pythonVersion(request.Context(), program)
-				entry["source"] = app.pythonSource(request.Context())
-				entry["configuredPath"] = strings.TrimSpace(app.store.setting("pythonPath", ""))
-				entry["configuredVersion"] = strings.TrimSpace(app.store.setting("pythonVersion", ""))
-			}
-			result = append(result, entry)
-		}
-		ok(writer, result)
+		ok(writer, app.runtimeEntries(request.Context()))
+		return
+	}
+	if tail == "runtimes/progress" && request.Method == "GET" {
+		app.runtimeProgressAPI(writer, request)
 		return
 	}
 	// 公告内容：服务端代理远端 tz.json，多源回退，失败返回空文本。
@@ -234,7 +225,7 @@ func (app *App) installDependency(ctx context.Context, item Object, writer io.Wr
 				command += " --registry=" + shellQuote(npmMirror)
 			}
 			command += " -- " + shellQuote(name)
-			err = app.process(ctx, app.root, writer, findShell(), "-c", command)
+			err = app.process(ctx, app.root, writer, app.shell(), "-c", command)
 		} else {
 			args := []string{"--prefix", filepath.Join(app.root, "packages"), action, "--no-audit", "--no-fund", "--ignore-scripts"}
 			if npmMirror != "" {
