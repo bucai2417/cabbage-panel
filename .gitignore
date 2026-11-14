@@ -1,5 +1,6 @@
 /data/
 /dist/
+/designs/
 web/node_modules/
 web/dist/*
 !web/dist/.gitkeep
