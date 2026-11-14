@@ -21,8 +21,11 @@ func tools() []Tool {
 	stringField := func(description string) Object { return Object{"type": "string", "description": description} }
 	idField := Object{"type": "integer", "minimum": 1}
 	idsField := Object{"type": "array", "items": idField, "minItems": 1, "maxItems": 500}
+	pathsField := Object{"type": "array", "items": stringField("文件路径"), "minItems": 1, "maxItems": 500}
 	return []Tool{
 		{"list_tasks", "列出定时任务及最近执行状态", "crons", "GET", "/crons", Object{"searchValue": stringField("按名称或命令搜索")}, []string{}, false},
+		{"get_task", "读取单个定时任务的详情与最近状态", "crons", "GET", "/crons/{id}", Object{"id": idField}, []string{"id"}, false},
+		{"read_task_source", "读取任务命令对应的脚本源码", "crons", "GET", "/crons/{id}/source", Object{"id": idField}, []string{"id"}, false},
 		{"create_task", "创建支持五段或六段 Cron 的任务；schedule 为空时仅手动执行。命令统一用 task 前缀，如 task example.py / task example.js / task example.ts", "crons", "POST", "/crons", Object{"name": stringField("名称"), "command": stringField("命令，统一用 task example.py 形式"), "schedule": stringField("Cron 表达式"), "timeout": Object{"type": "integer", "minimum": 0}, "allowConcurrent": Object{"type": "boolean"}}, []string{"name", "command", "schedule"}, false},
 		{"update_task", "修改已有定时任务", "crons", "PUT", "/crons", Object{"id": idField, "name": stringField("名称"), "command": stringField("命令"), "schedule": stringField("Cron 表达式"), "timeout": Object{"type": "integer", "minimum": 0}, "allowConcurrent": Object{"type": "boolean"}}, []string{"id"}, false},
 		{"run_tasks", "异步运行任务，返回 runId，可用 read_log 查询", "crons", "PUT", "/crons/run", Object{"ids": idsField}, []string{"ids"}, true},
@@ -32,14 +35,27 @@ func tools() []Tool {
 		{"delete_tasks", "永久删除任务定义", "crons", "DELETE", "/crons", Object{"ids": idsField}, []string{"ids"}, true},
 		{"list_envs", "列出环境变量，值默认隐藏；includeValues=true 显示敏感值", "envs", "GET", "/envs", Object{"searchValue": stringField("搜索"), "includeValues": Object{"type": "boolean"}}, []string{}, false},
 		{"create_envs", "批量新增环境变量", "envs", "POST", "/envs", Object{"items": Object{"type": "array", "items": Object{"type": "object", "properties": Object{"name": stringField("变量名"), "value": stringField("变量值"), "remarks": stringField("备注")}, "required": []string{"name", "value"}}, "minItems": 1}}, []string{"items"}, true},
+		{"update_env", "修改环境变量；status 0 启用、1 停用，未提供的字段保持不变", "envs", "PUT", "/envs", Object{"id": idField, "name": stringField("变量名"), "value": stringField("变量值"), "remarks": stringField("备注"), "status": Object{"type": "integer", "minimum": 0, "maximum": 1}}, []string{"id"}, false},
+		{"delete_envs", "永久删除环境变量", "envs", "DELETE", "/envs", Object{"ids": idsField}, []string{"ids"}, true},
 		{"list_scripts", "列出脚本文件", "scripts", "GET", "/scripts", Object{}, []string{}, false},
 		{"read_script", "读取 UTF-8 脚本文件", "scripts", "GET", "/scripts/detail", Object{"path": stringField("相对于脚本目录的完整文件名")}, []string{"path"}, false},
 		{"write_script", "保存 UTF-8 脚本文件，已有内容会保存历史版本", "scripts", "PUT", "/scripts", Object{"filename": stringField("文件名或相对路径"), "content": stringField("UTF-8 内容")}, []string{"filename", "content"}, false},
-		{"list_logs", "列出最近运行记录", "logs", "GET", "/logs", Object{"taskId": idField, "limit": Object{"type": "integer", "minimum": 1, "maximum": 1000}}, []string{}, false},
+		{"delete_scripts", "永久删除一个或多个脚本文件", "scripts", "POST", "/scripts/operations", Object{"paths": pathsField}, []string{"paths"}, false},
+		{"move_script", "移动或重命名脚本文件", "scripts", "POST", "/scripts/operations", Object{"source": stringField("原路径"), "destination": stringField("目标路径")}, []string{"source", "destination"}, false},
+		{"list_script_history", "列出脚本的历史版本", "scripts", "GET", "/scripts/history", Object{"path": stringField("脚本相对路径")}, []string{"path"}, false},
+		{"restore_script_history", "把脚本恢复到指定历史版本", "scripts", "PUT", "/scripts/history/restore", Object{"id": idField}, []string{"id"}, false},
+		{"list_logs", "列出最近运行记录，可按资源类型或任务筛选", "logs", "GET", "/logs/runs", Object{"kind": stringField("crons / subscriptions / dependencies"), "taskId": idField, "limit": Object{"type": "integer", "minimum": 1, "maximum": 1000}}, []string{}, false},
 		{"read_log", "按 runId 获取日志与运行状态", "logs", "GET", "/logs/run/{id}", Object{"id": idField}, []string{"id"}, false},
+		{"delete_runs", "删除运行记录及其日志文件；运行中的记录不会被删除", "logs", "DELETE", "/logs", Object{"ids": idsField}, []string{"ids"}, true},
 		{"list_subscriptions", "列出订阅", "subscriptions", "GET", "/subscriptions", Object{}, []string{}, false},
 		{"sync_subscriptions", "异步同步订阅", "subscriptions", "PUT", "/subscriptions/run", Object{"ids": idsField}, []string{"ids"}, true},
+		{"create_subscription", "创建文件或 Git 仓库订阅；type 为 file 或 git-repo", "subscriptions", "POST", "/subscriptions", Object{"name": stringField("名称"), "type": stringField("file 或 git-repo"), "url": stringField("HTTP(S) 地址"), "alias": stringField("别名，字母数字下划线连字符"), "schedule": stringField("Cron 表达式，可空"), "branch": stringField("Git 分支，可空"), "autoAddCron": Object{"type": "boolean"}, "whitelist": stringField("文件白名单正则，可空"), "blacklist": stringField("文件黑名单正则，可空")}, []string{"name", "type", "url", "alias"}, false},
+		{"update_subscription", "修改订阅；未提供的字段保持不变", "subscriptions", "PUT", "/subscriptions", Object{"id": idField, "name": stringField("名称"), "type": stringField("file 或 git-repo"), "url": stringField("HTTP(S) 地址"), "alias": stringField("别名"), "schedule": stringField("Cron 表达式"), "branch": stringField("Git 分支"), "autoAddCron": Object{"type": "boolean"}, "whitelist": stringField("白名单正则"), "blacklist": stringField("黑名单正则")}, []string{"id"}, false},
+		{"delete_subscriptions", "永久删除订阅", "subscriptions", "DELETE", "/subscriptions", Object{"ids": idsField}, []string{"ids"}, true},
 		{"list_dependencies", "列出已管理的依赖与安装状态", "dependencies", "GET", "/dependencies", Object{}, []string{}, false},
+		{"install_dependency", "新增并异步安装依赖；type 0 Node.js、1 Python、2 系统包", "dependencies", "POST", "/dependencies", Object{"name": stringField("包名"), "type": Object{"type": "integer", "minimum": 0, "maximum": 2}, "remark": stringField("备注")}, []string{"name", "type"}, false},
+		{"reinstall_dependencies", "重新安装指定依赖", "dependencies", "PUT", "/dependencies/reinstall", Object{"ids": idsField}, []string{"ids"}, true},
+		{"delete_dependencies", "卸载并删除指定依赖", "dependencies", "DELETE", "/dependencies", Object{"ids": idsField}, []string{"ids"}, true},
 	}
 }
 
@@ -110,7 +126,7 @@ func (app *App) mcp(writer http.ResponseWriter, request *http.Request, principal
 			if !app.allowed(principal, tool.Scope) {
 				continue
 			}
-			items = append(items, Object{"name": tool.Name, "description": tool.Description, "inputSchema": Object{"type": "object", "properties": tool.Properties, "required": tool.Required, "additionalProperties": false}, "annotations": Object{"readOnlyHint": tool.Method == "GET", "destructiveHint": tool.Method == "DELETE", "openWorldHint": tool.Method != "GET"}})
+			items = append(items, Object{"name": tool.Name, "description": tool.Description, "inputSchema": Object{"type": "object", "properties": tool.Properties, "required": tool.Required, "additionalProperties": false}, "annotations": Object{"readOnlyHint": tool.Method == "GET", "destructiveHint": tool.Method == "DELETE" || strings.HasPrefix(tool.Name, "delete_") || strings.HasPrefix(tool.Name, "stop_") || strings.HasPrefix(tool.Name, "disable_") || strings.HasPrefix(tool.Name, "restore_"), "openWorldHint": tool.Method != "GET"}})
 		}
 		result = Object{"tools": items}
 	case "tools/call":
@@ -160,6 +176,12 @@ func (app *App) mcp(writer http.ResponseWriter, request *http.Request, principal
 			if name == "create_envs" {
 				body = arguments["items"]
 			}
+		}
+		if name == "delete_scripts" {
+			body = Object{"operation": "delete", "paths": arguments["paths"]}
+		}
+		if name == "move_script" {
+			body = Object{"operation": "rename", "paths": []any{arguments["source"]}, "destination": arguments["destination"]}
 		}
 		if selected.Method == "GET" {
 			for key, value := range arguments {

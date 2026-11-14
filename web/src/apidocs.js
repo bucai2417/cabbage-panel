@@ -862,7 +862,7 @@ export const apiGroups = [
     endpoints: [
       {
         id: 'mcp-call', method: 'POST', path: '/mcp', absolute: true, tabs: apiOnly,
-        summary: 'MCP JSON-RPC', description: '无状态 Streamable HTTP，支持 initialize、ping、tools/list、tools/call，以及返回空列表的 resources/list、prompts/list。当前提供 18 个工具（任务、变量、脚本、日志、订阅、依赖），复用应用与资源权限。Header 需带 Authorization: Bearer <token>，Content-Type 必须为 application/json。',
+        summary: 'MCP JSON-RPC', description: '无状态 Streamable HTTP，支持 initialize、ping、tools/list、tools/call，以及返回空列表的 resources/list、prompts/list。当前提供 33 个工具（任务详情与源码、变量更新删除、脚本历史/移动/删除、订阅 CRUD、依赖安装/重装/卸载、日志查询与删除），复用应用与资源权限。Header 需带 Authorization: Bearer <token>，Content-Type 必须为 application/json。',
         body: { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
         response: { code: 200, data: { jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'list_crons', description: '列出定时任务' }] } } },
       },

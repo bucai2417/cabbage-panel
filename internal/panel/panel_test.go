@@ -209,8 +209,15 @@ func TestAuthScopesAndMCP(test *testing.T) {
 	}
 	_, response = panel.call(test, "POST", "/mcp", Object{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, token)
 	listedTools := response["result"].(map[string]any)["tools"].([]any)
-	if len(listedTools) != 8 {
+	if len(listedTools) != 10 {
 		test.Fatalf("unexpected tool access %d", len(listedTools))
+	}
+	names := map[string]bool{}
+	for _, entry := range listedTools {
+		names[text(entry.(map[string]any)["name"])] = true
+	}
+	if !names["get_task"] || !names["read_task_source"] {
+		test.Fatalf("task read tools missing: %v", names)
 	}
 	_, response = panel.call(test, "POST", "/mcp", Object{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": Object{"name": "create_task", "arguments": Object{"name": "MCP 中文任务", "command": "echo MCP", "schedule": ""}}}, token)
 	if response["result"].(map[string]any)["isError"] != false {
@@ -880,6 +887,112 @@ func TestLoginAlerts(test *testing.T) {
 		if !titles[want] {
 			test.Fatalf("missing alert %s: %v", want, titles)
 		}
+	}
+}
+
+func TestMCPExtendedTools(test *testing.T) {
+	panel := setupPanel(test)
+	created := panel.data(test, "POST", "/api/apps", Object{"name": "MCP 扩展测试", "scopes": []string{"crons", "envs", "scripts", "subscriptions", "dependencies", "logs", "mcp"}}).(map[string]any)
+	status, response := panel.call(test, "POST", "/open/auth/token", Object{"client_id": text(created["client_id"]), "client_secret": text(created["client_secret"])}, "")
+	if status != 200 {
+		test.Fatalf("app token: %d %v", status, response)
+	}
+	token := text(response["data"].(map[string]any)["token"])
+	call := func(name string, arguments Object) Object {
+		status, response := panel.call(test, "POST", "/mcp", Object{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": Object{"name": name, "arguments": arguments}}, token)
+		if status != 200 {
+			test.Fatalf("%s HTTP %d: %v", name, status, response)
+		}
+		result := Object(response["result"].(map[string]any))
+		if boolean(result["isError"]) {
+			test.Fatalf("%s failed: %v", name, result)
+		}
+		return result
+	}
+	dataOf := func(result Object) any {
+		payload := result["structuredContent"].(map[string]any)
+		return payload["data"]
+	}
+
+	env := panel.data(test, "POST", "/api/envs", []Object{{"name": "MCP_ENV", "value": "one"}}).([]any)[0].(map[string]any)
+	call("update_env", Object{"id": integer(env["id"]), "value": "two"})
+	envs := panel.data(test, "GET", "/api/envs", nil).([]any)
+	if text(envs[0].(map[string]any)["value"]) != "two" {
+		test.Fatalf("update_env mismatch: %v", envs)
+	}
+	call("delete_envs", Object{"ids": []any{integer(env["id"])}})
+	if len(panel.data(test, "GET", "/api/envs", nil).([]any)) != 0 {
+		test.Fatal("delete_envs did not remove the env")
+	}
+
+	panel.data(test, "POST", "/api/scripts", Object{"filename": "mcp-source.py", "content": "print('mcp')\n"})
+	taskID := panel.task(test, "MCP 源码任务", "task mcp-source.py", nil)
+	result := call("get_task", Object{"id": taskID})
+	task := dataOf(result).(map[string]any)
+	if text(task["name"]) != "MCP 源码任务" {
+		test.Fatalf("get_task mismatch: %v", task)
+	}
+	result = call("read_task_source", Object{"id": taskID})
+	source := dataOf(result).(map[string]any)
+	if !strings.Contains(text(source["content"]), "mcp") {
+		test.Fatalf("read_task_source mismatch: %v", source)
+	}
+
+	panel.data(test, "PUT", "/api/scripts", Object{"filename": "mcp-source.py", "content": "print('v2')\n"})
+	result = call("list_script_history", Object{"path": "mcp-source.py"})
+	history := dataOf(result).([]any)
+	if len(history) == 0 {
+		test.Fatal("script history missing")
+	}
+	call("restore_script_history", Object{"id": integer(history[0].(map[string]any)["id"])})
+	if content := panel.data(test, "GET", "/api/scripts/detail?path=mcp-source.py", nil); !strings.Contains(text(content), "mcp") {
+		test.Fatalf("script history restore failed: %v", content)
+	}
+	call("delete_scripts", Object{"paths": []any{"mcp-source.py"}})
+	if _, err := os.Stat(filepath.Join(panel.app.root, "scripts", "mcp-source.py")); !os.IsNotExist(err) {
+		test.Fatal("delete_scripts did not remove the file", err)
+	}
+
+	panel.data(test, "POST", "/api/scripts", Object{"filename": "move-a.py", "content": "print('move')\n"})
+	call("move_script", Object{"source": "move-a.py", "destination": "move-b.py"})
+	if status, _ := panel.call(test, "GET", "/api/scripts/detail?path=move-b.py", nil, panel.token); status != 200 {
+		test.Fatalf("move_script destination status %d", status)
+	}
+	call("delete_scripts", Object{"paths": []any{"move-b.py"}})
+
+	result = call("create_subscription", Object{"name": "MCP 订阅", "type": "file", "url": "https://example.com/a.py", "alias": "mcp-sub", "schedule": ""})
+	subscription := dataOf(result).(map[string]any)
+	subID := integer(subscription["id"])
+	call("update_subscription", Object{"id": subID, "name": "MCP 订阅 2"})
+	subscriptions := panel.data(test, "GET", "/api/subscriptions", nil).([]any)
+	if len(subscriptions) != 1 || text(subscriptions[0].(map[string]any)["name"]) != "MCP 订阅 2" {
+		test.Fatalf("update_subscription mismatch: %v", subscriptions)
+	}
+	call("delete_subscriptions", Object{"ids": []any{subID}})
+	if len(panel.data(test, "GET", "/api/subscriptions", nil).([]any)) != 0 {
+		test.Fatal("delete_subscriptions did not remove the subscription")
+	}
+
+	logTask := panel.task(test, "MCP 日志任务", "echo mcp-log", nil)
+	runID := panel.run(test, logTask)
+	panel.finished(test, runID)
+	result = call("list_logs", Object{"kind": "crons", "limit": int64(50)})
+	runs := dataOf(result).([]any)
+	found := false
+	for _, value := range runs {
+		if integer(value.(map[string]any)["id"]) == runID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		test.Fatalf("list_logs did not return run %d: %v", runID, runs)
+	}
+	call("delete_runs", Object{"ids": []any{runID}})
+	var remaining int
+	_ = panel.app.store.db.QueryRow("SELECT COUNT(*) FROM runs WHERE id=?", runID).Scan(&remaining)
+	if remaining != 0 {
+		test.Fatal("delete_runs did not remove the run")
 	}
 }
 
