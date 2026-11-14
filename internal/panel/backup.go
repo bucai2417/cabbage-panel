@@ -13,15 +13,26 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
+
+type BackupContent struct {
+	Scripts bool `json:"scripts"`
+	Config  bool `json:"config"`
+	Logs    bool `json:"logs"`
+	Runs    bool `json:"runs"`
+}
+
+func fullBackupContent() BackupContent {
+	return BackupContent{Scripts: true, Config: true, Logs: true, Runs: true}
+}
 
 type Backup struct {
 	Format   int                 `json:"format"`
 	Version  string              `json:"version"`
 	Created  string              `json:"created"`
+	Content  *BackupContent      `json:"content,omitempty"`
 	Records  map[string][]Object `json:"records"`
 	Settings map[string]string   `json:"settings"`
 	Runs     []Object            `json:"runs"`
@@ -45,6 +56,29 @@ func (app *App) backupAPI(writer http.ResponseWriter, request *http.Request, pat
 		return
 	}
 	if tail == "/export" && request.Method == "POST" {
+		content := fullBackupContent()
+		var body struct {
+			Scripts *bool `json:"scripts"`
+			Config  *bool `json:"config"`
+			Logs    *bool `json:"logs"`
+			Runs    *bool `json:"runs"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			fail(writer, 400, "备份内容参数无效")
+			return
+		}
+		if body.Scripts != nil {
+			content.Scripts = *body.Scripts
+		}
+		if body.Config != nil {
+			content.Config = *body.Config
+		}
+		if body.Logs != nil {
+			content.Logs = *body.Logs
+		}
+		if body.Runs != nil {
+			content.Runs = *body.Runs
+		}
 		if app.engine.active() > 0 || !app.gate.TryLock() {
 			fail(writer, 409, "系统正在执行任务或处理请求，请稍后重试")
 			return
@@ -54,7 +88,7 @@ func (app *App) backupAPI(writer http.ResponseWriter, request *http.Request, pat
 			fail(writer, 409, "请先停止任务并等待队列清空，再创建一致性备份")
 			return
 		}
-		name, err := app.createBackup()
+		name, err := app.createBackupWithContent(content)
 		if err != nil {
 			apiError(writer, err)
 			return
@@ -91,6 +125,61 @@ func (app *App) backupAPI(writer http.ResponseWriter, request *http.Request, pat
 		data, err := io.ReadAll(io.LimitReader(reader, 256<<20+1))
 		if err != nil || len(data) > 256<<20 {
 			fail(writer, 400, "备份最大 256MB")
+			return
+		}
+		safety, err := app.restoreBackup(data)
+		if err != nil {
+			apiError(writer, err)
+			return
+		}
+		app.engine.reschedule()
+		ok(writer, Object{"safetyBackup": safety, "message": "恢复成功，请重新登录；依赖请在依赖管理中重新安装"})
+		return
+	}
+	if tail == "/restore" && request.Method == "POST" {
+		if app.engine.active() > 0 || !app.gate.TryLock() {
+			fail(writer, 409, "系统正在执行任务或处理请求，请稍后重试")
+			return
+		}
+		defer app.gate.Unlock()
+		if app.engine.active() > 0 {
+			fail(writer, 409, "请先停止任务并等待队列清空，再恢复备份")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+			Auto bool   `json:"auto"`
+		}
+		if err := decode(request, &body); err != nil {
+			apiError(writer, err)
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" || filepath.Base(name) != name || !strings.HasSuffix(name, ".zip") {
+			fail(writer, 400, "备份名称无效")
+			return
+		}
+		directory := filepath.Join(app.root, "backups")
+		if body.Auto {
+			directory = filepath.Join(directory, "auto")
+		}
+		target, err := safePath(directory, name)
+		if err != nil {
+			apiError(writer, err)
+			return
+		}
+		info, err := os.Stat(target)
+		if err != nil {
+			fail(writer, 404, "备份不存在")
+			return
+		}
+		if info.Size() > 256<<20 {
+			fail(writer, 400, "备份最大 256MB")
+			return
+		}
+		data, err := os.ReadFile(target)
+		if err != nil {
+			apiError(writer, err)
 			return
 		}
 		safety, err := app.restoreBackup(data)
@@ -165,12 +254,16 @@ func (app *App) listBackups() ([]Object, error) {
 }
 
 func (app *App) createBackup() (string, error) {
-	return app.createBackupIn(filepath.Join(app.root, "backups"), "")
+	return app.createBackupWithContent(fullBackupContent())
+}
+
+func (app *App) createBackupWithContent(content BackupContent) (string, error) {
+	return app.createBackupIn(filepath.Join(app.root, "backups"), "", content)
 }
 
 // createBackupIn 在指定目录创建备份；prefix 用于区分自动备份文件名。
-func (app *App) createBackupIn(directory, prefix string) (string, error) {
-	manifest := Backup{Format: 1, Version: app.version, Created: now(), Records: map[string][]Object{}, Settings: map[string]string{}}
+func (app *App) createBackupIn(directory, prefix string, content BackupContent) (string, error) {
+	manifest := Backup{Format: 1, Version: app.version, Created: now(), Content: &content, Records: map[string][]Object{}, Settings: map[string]string{}}
 	for _, kind := range recordKinds {
 		items, err := app.store.list(kind)
 		if err != nil {
@@ -193,9 +286,11 @@ func (app *App) createBackupIn(directory, prefix string) (string, error) {
 	if err := rows.Close(); err != nil {
 		return "", err
 	}
-	manifest.Runs, err = app.runs("", 0, 10000)
-	if err != nil {
-		return "", err
+	if content.Runs {
+		manifest.Runs, err = app.runs("", 0, 10000)
+		if err != nil {
+			return "", err
+		}
 	}
 	manifestData, err := json.Marshal(manifest)
 	if err != nil {
@@ -226,8 +321,18 @@ func (app *App) createBackupIn(directory, prefix string) (string, error) {
 		if _, err := entry.Write(manifestData); err != nil {
 			return err
 		}
-		for _, directory := range []string{"scripts", "config", "logs"} {
-			root := filepath.Join(app.root, directory)
+		for _, section := range []struct {
+			name    string
+			include bool
+		}{
+			{"scripts", content.Scripts},
+			{"config", content.Config},
+			{"logs", content.Logs},
+		} {
+			if !section.include {
+				continue
+			}
+			root := filepath.Join(app.root, section.name)
 			if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 				if walkErr != nil {
 					return walkErr
@@ -367,6 +472,10 @@ func (app *App) restoreBackup(data []byte) (string, error) {
 	if _, err := bcrypt.Cost([]byte(manifest.Settings["password"])); err != nil {
 		return "", errors.New("备份密码散列无效")
 	}
+	content := fullBackupContent()
+	if manifest.Content != nil {
+		content = *manifest.Content
+	}
 	ids := map[int64]bool{}
 	for kind, items := range manifest.Records {
 		if !contains(recordKinds, kind) {
@@ -389,7 +498,11 @@ func (app *App) restoreBackup(data []byte) (string, error) {
 		return "", err
 	}
 	defer tx.Rollback()
-	for _, table := range []string{"records", "settings", "runs", "sessions"} {
+	tables := []string{"records", "settings", "sessions"}
+	if content.Runs {
+		tables = append(tables, "runs")
+	}
+	for _, table := range tables {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
 			return "", err
 		}
@@ -414,13 +527,15 @@ func (app *App) restoreBackup(data []byte) (string, error) {
 			return "", err
 		}
 	}
-	for _, run := range manifest.Runs {
-		status := text(run["status"])
-		if status == "running" || status == "queued" {
-			status = "interrupted"
-		}
-		if _, err := tx.Exec("INSERT INTO runs(id,task_id,kind,name,command,status,started,finished,exit_code,duration,log_path,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", run["id"], run["taskId"], run["kind"], run["name"], run["command"], status, run["started"], run["finished"], run["exitCode"], run["duration"], run["logPath"], run["created"]); err != nil {
-			return "", err
+	if content.Runs {
+		for _, run := range manifest.Runs {
+			status := text(run["status"])
+			if status == "running" || status == "queued" {
+				status = "interrupted"
+			}
+			if _, err := tx.Exec("INSERT INTO runs(id,task_id,kind,name,command,status,started,finished,exit_code,duration,log_path,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", run["id"], run["taskId"], run["kind"], run["name"], run["command"], status, run["started"], run["finished"], run["exitCode"], run["duration"], run["logPath"], run["created"]); err != nil {
+				return "", err
+			}
 		}
 	}
 	moved := []string{}
@@ -431,7 +546,18 @@ func (app *App) restoreBackup(data []byte) (string, error) {
 			_ = os.Rename(filepath.Join(stage, directory+"-old"), filepath.Join(app.root, directory))
 		}
 	}
-	for _, directory := range []string{"scripts", "config", "logs"} {
+	for _, section := range []struct {
+		name    string
+		include bool
+	}{
+		{"scripts", content.Scripts},
+		{"config", content.Config},
+		{"logs", content.Logs},
+	} {
+		if !section.include {
+			continue
+		}
+		directory := section.name
 		if err := os.MkdirAll(filepath.Join(stage, directory), 0700); err != nil {
 			rollback()
 			return "", err
@@ -454,8 +580,6 @@ func (app *App) restoreBackup(data []byte) (string, error) {
 	return safety, nil
 }
 
-const autoBackupKeep = 14
-
 // startAutoBackup 启动每日自动备份检查；设置修改后无需重启即可生效。
 func (app *App) startAutoBackup() {
 	app.autoBackupStop = make(chan struct{})
@@ -463,6 +587,7 @@ func (app *App) startAutoBackup() {
 	go func() {
 		defer close(app.autoBackupDone)
 		app.maybeAutoBackup(time.Now())
+		app.maybeCleanupAutoBackups(time.Now())
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -471,6 +596,7 @@ func (app *App) startAutoBackup() {
 				return
 			case now := <-ticker.C:
 				app.maybeAutoBackup(now)
+				app.maybeCleanupAutoBackups(now)
 			}
 		}
 	}()
@@ -514,25 +640,72 @@ func (app *App) runAutoBackup() {
 	}
 	defer app.gate.Unlock()
 	directory := filepath.Join(app.root, "backups", "auto")
-	name, err := app.createBackupIn(directory, "auto-")
+	name, err := app.createBackupIn(directory, "auto-", fullBackupContent())
 	if err != nil {
 		app.appendSystemLog("error", "[AutoBackup] 自动备份失败: "+err.Error())
+		if app.alertConfig().BackupFailures {
+			app.alertAsync("自动备份失败", "时间："+time.Now().Format("2006-01-02 15:04:05")+"\n错误："+err.Error())
+		}
 		return
 	}
 	app.appendSystemLog("info", "[AutoBackup] 已创建自动备份 "+name)
-	app.pruneAutoBackups(directory, autoBackupKeep)
 }
 
-// pruneAutoBackups 只保留最近的 keep 份自动备份，避免磁盘无限增长。
-func (app *App) pruneAutoBackups(directory string, keep int) {
-	entries, err := os.ReadDir(directory)
-	if err != nil {
+// maybeCleanupAutoBackups 在设定时间每天清理一次过期自动备份。
+func (app *App) maybeCleanupAutoBackups(now time.Time) {
+	if app.store.setting("autoBackupCleanupEnabled", "true") != "true" {
 		return
 	}
-	files := []struct {
-		name string
-		mod  time.Time
-	}{}
+	value := strings.TrimSpace(app.store.setting("autoBackupCleanupTime", "04:00"))
+	scheduled, err := time.Parse("15:04", value)
+	if err != nil || now.Hour() != scheduled.Hour() || now.Minute() != scheduled.Minute() {
+		return
+	}
+	key := now.Format("2006-01-02") + " cleanup " + value
+	app.autoBackupMu.Lock()
+	if app.autoCleanupLast == key {
+		app.autoBackupMu.Unlock()
+		return
+	}
+	app.autoCleanupLast = key
+	app.autoBackupMu.Unlock()
+	app.cleanupAutoBackups()
+}
+
+// cleanupAutoBackups 删除超过保留天数的自动备份；手动备份不受影响。
+func (app *App) cleanupAutoBackups() {
+	days := integer(app.store.setting("autoBackupKeepDays", "30"))
+	if days < 1 {
+		days = 30
+	}
+	if days > 3650 {
+		days = 3650
+	}
+	directory := filepath.Join(app.root, "backups", "auto")
+	cutoff := time.Now().AddDate(0, 0, -int(days))
+	removed, err := app.pruneAutoBackupsBefore(directory, cutoff)
+	if err != nil {
+		app.appendSystemLog("error", "[AutoBackup] 清理旧备份失败: "+err.Error())
+		if app.alertConfig().BackupFailures {
+			app.alertAsync("自动备份清理失败", "时间："+time.Now().Format("2006-01-02 15:04:05")+"\n错误："+err.Error())
+		}
+		return
+	}
+	if removed > 0 {
+		app.appendSystemLog("info", fmt.Sprintf("[AutoBackup] 已清理 %d 份超过 %d 天的自动备份", removed, days))
+	}
+}
+
+// pruneAutoBackupsBefore 删除修改时间早于 cutoff 的自动备份，返回删除数量。
+func (app *App) pruneAutoBackupsBefore(directory string, cutoff time.Time) (int, error) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	removed := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".zip") {
 			continue
@@ -541,16 +714,11 @@ func (app *App) pruneAutoBackups(directory string, keep int) {
 		if err != nil {
 			continue
 		}
-		files = append(files, struct {
-			name string
-			mod  time.Time
-		}{entry.Name(), info.ModTime()})
+		if info.ModTime().Before(cutoff) {
+			if err := os.Remove(filepath.Join(directory, entry.Name())); err == nil {
+				removed++
+			}
+		}
 	}
-	if len(files) <= keep {
-		return
-	}
-	sort.Slice(files, func(left, right int) bool { return files[left].mod.After(files[right].mod) })
-	for _, file := range files[keep:] {
-		_ = os.Remove(filepath.Join(directory, file.name))
-	}
+	return removed, nil
 }

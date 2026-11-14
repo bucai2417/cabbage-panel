@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -431,47 +430,149 @@ func TestAutoBackupDirectoryAndSchedule(test *testing.T) {
 	}
 }
 
-func TestAutoBackupPrunesOldFiles(test *testing.T) {
+func TestAutoBackupCleanupByAge(test *testing.T) {
 	panel := setupPanel(test)
 	directory := filepath.Join(panel.app.root, "backups", "auto")
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		test.Fatal(err)
 	}
-	base := time.Now().Add(-20 * time.Hour)
-	for index := 0; index < 16; index++ {
-		target := filepath.Join(directory, fmt.Sprintf("auto-%02d.zip", index))
+	now := time.Now()
+	for name, stamp := range map[string]time.Time{
+		"auto-old.zip": now.AddDate(0, 0, -40),
+		"auto-new.zip": now.AddDate(0, 0, -10),
+	} {
+		target := filepath.Join(directory, name)
 		if err := os.WriteFile(target, []byte("x"), 0600); err != nil {
 			test.Fatal(err)
 		}
-		stamp := base.Add(time.Duration(index) * time.Minute)
 		if err := os.Chtimes(target, stamp, stamp); err != nil {
 			test.Fatal(err)
 		}
 	}
-	panel.app.pruneAutoBackups(directory, 14)
-	entries, err := os.ReadDir(directory)
-	if err != nil {
+	manual := filepath.Join(panel.app.root, "backups", "manual-old.zip")
+	if err := os.WriteFile(manual, []byte("x"), 0600); err != nil {
 		test.Fatal(err)
 	}
-	if len(entries) != 14 {
-		test.Fatalf("auto backup retention mismatch: %d", len(entries))
+	if err := os.Chtimes(manual, now.AddDate(0, 0, -40), now.AddDate(0, 0, -40)); err != nil {
+		test.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(directory, "auto-00.zip")); !os.IsNotExist(err) {
-		test.Fatal("oldest auto backup not pruned")
+	if err := panel.app.store.setSetting("autoBackupKeepDays", "30"); err != nil {
+		test.Fatal(err)
+	}
+	panel.app.cleanupAutoBackups()
+	if _, err := os.Stat(filepath.Join(directory, "auto-old.zip")); !os.IsNotExist(err) {
+		test.Fatal("expired auto backup not cleaned")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "auto-new.zip")); err != nil {
+		test.Fatal("recent auto backup removed", err)
+	}
+	if _, err := os.Stat(manual); err != nil {
+		test.Fatal("manual backup must not be auto-cleaned", err)
 	}
 }
 
 func TestAutoBackupSettingsValidation(test *testing.T) {
 	panel := setupPanel(test)
 	for _, value := range []string{"25:00", "3:00", "12:60", "abc"} {
-		status, response := panel.call(test, "PUT", "/api/system/settings", Object{"autoBackupTime": value}, panel.token)
-		if status != 400 {
-			test.Fatalf("invalid backup time accepted: %s %v", value, response)
+		for _, key := range []string{"autoBackupTime", "autoBackupCleanupTime"} {
+			status, response := panel.call(test, "PUT", "/api/system/settings", Object{key: value}, panel.token)
+			if status != 400 {
+				test.Fatalf("invalid %s accepted: %s %v", key, value, response)
+			}
 		}
 	}
-	status, response := panel.call(test, "PUT", "/api/system/settings", Object{"autoBackupEnabled": "true", "autoBackupTime": "03:30"}, panel.token)
+	for _, value := range []string{"0", "3651", "abc"} {
+		status, response := panel.call(test, "PUT", "/api/system/settings", Object{"autoBackupKeepDays": value}, panel.token)
+		if status != 400 {
+			test.Fatalf("invalid keep days accepted: %s %v", value, response)
+		}
+	}
+	status, response := panel.call(test, "PUT", "/api/system/settings", Object{
+		"autoBackupEnabled":        "true",
+		"autoBackupTime":           "03:30",
+		"autoBackupCleanupEnabled": "true",
+		"autoBackupKeepDays":       "30",
+		"autoBackupCleanupTime":    "04:30",
+	}, panel.token)
 	if status != 200 {
 		test.Fatalf("valid auto backup settings rejected: %v", response)
+	}
+}
+
+func TestPartialBackupAndRestoreFromHistory(test *testing.T) {
+	panel := setupPanel(test)
+	scriptName := "部分内容.py"
+	scriptPath := filepath.Join(panel.app.root, "scripts", scriptName)
+	panel.data(test, "POST", "/api/scripts", Object{"filename": scriptName, "content": "first\n"})
+
+	partial := panel.data(test, "POST", "/api/backups/export", Object{"scripts": false, "config": false, "logs": false, "runs": false}).(map[string]any)
+	partialName := text(partial["name"])
+	archive, err := zip.OpenReader(filepath.Join(panel.app.root, "backups", partialName))
+	if err != nil {
+		test.Fatal(err)
+	}
+	var manifest Backup
+	for _, entry := range archive.File {
+		if entry.Name == "manifest.json" {
+			reader, err := entry.Open()
+			if err != nil {
+				test.Fatal(err)
+			}
+			content, err := io.ReadAll(reader)
+			reader.Close()
+			if err != nil {
+				test.Fatal(err)
+			}
+			if err := json.Unmarshal(content, &manifest); err != nil {
+				test.Fatal(err)
+			}
+		}
+	}
+	archive.Close()
+	if manifest.Content == nil || manifest.Content.Scripts || manifest.Content.Config || manifest.Content.Logs || manifest.Content.Runs {
+		test.Fatalf("partial content flags wrong: %+v", manifest.Content)
+	}
+
+	if err := os.WriteFile(scriptPath, []byte("changed\n"), 0600); err != nil {
+		test.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(panel.app.root, "backups", partialName))
+	if err != nil {
+		test.Fatal(err)
+	}
+	if _, err := panel.app.restoreBackup(data); err != nil {
+		test.Fatal(err)
+	}
+	if content, err := os.ReadFile(scriptPath); err != nil || string(content) != "changed\n" {
+		test.Fatalf("partial restore must leave scripts untouched: %q %v", content, err)
+	}
+
+	// 恢复会撤销会话，重新登录后测试历史列表恢复。
+	status, response := panel.call(test, "POST", "/api/user/login", Object{"username": "admin", "password": "test-password-123"}, "")
+	if status != 200 {
+		test.Fatalf("login after partial restore: %d %v", status, response)
+	}
+	panel.token = text(response["data"].(map[string]any)["token"])
+
+	if err := os.WriteFile(scriptPath, []byte("first\n"), 0600); err != nil {
+		test.Fatal(err)
+	}
+	full := panel.data(test, "POST", "/api/backups/export", Object{}).(map[string]any)
+	fullName := text(full["name"])
+	if err := os.WriteFile(scriptPath, []byte("changed-again\n"), 0600); err != nil {
+		test.Fatal(err)
+	}
+	status, response = panel.call(test, "POST", "/api/backups/restore", Object{"name": fullName, "auto": false}, panel.token)
+	if status != 200 {
+		test.Fatalf("restore from history: %d %v", status, response)
+	}
+	status, response = panel.call(test, "POST", "/api/user/login", Object{"username": "admin", "password": "test-password-123"}, "")
+	if status != 200 {
+		test.Fatalf("login after full restore: %d %v", status, response)
+	}
+	panel.token = text(response["data"].(map[string]any)["token"])
+	if content, err := os.ReadFile(scriptPath); err != nil || string(content) != "first\n" {
+		test.Fatalf("full restore should restore script snapshot: %q %v", content, err)
 	}
 }
 
@@ -694,6 +795,90 @@ func TestIPLocationUsesHTTPSAndParses(t *testing.T) {
 	for _, part := range []string{"美国", "加利福尼亚州", "Google LLC"} {
 		if !strings.Contains(address, part) {
 			t.Fatalf("location missing %s: %q", part, address)
+		}
+	}
+}
+
+func TestAlertConfigAPI(test *testing.T) {
+	panel := setupPanel(test)
+	config := panel.data(test, "GET", "/api/system/alerts", nil).(map[string]any)
+	if !boolean(config["taskFailures"]) || !boolean(config["backupFailures"]) || !boolean(config["loginFailures"]) || integer(config["loginFailureThreshold"]) != 5 {
+		test.Fatalf("unexpected alert defaults: %v", config)
+	}
+	panel.data(test, "PUT", "/api/system/alerts", Object{
+		"taskFailures":          false,
+		"backupFailures":        false,
+		"updateFailures":        true,
+		"loginFailures":         true,
+		"loginFailureThreshold": 3,
+		"loginNewIP":            false,
+		"loginBlacklist":        true,
+	})
+	config = panel.data(test, "GET", "/api/system/alerts", nil).(map[string]any)
+	if boolean(config["taskFailures"]) || boolean(config["backupFailures"]) || integer(config["loginFailureThreshold"]) != 3 {
+		test.Fatalf("alert config not saved: %v", config)
+	}
+	notifications := panel.data(test, "GET", "/api/system/notifications", nil).(map[string]any)
+	if boolean(notifications["notifyFailures"]) {
+		test.Fatal("notifyFailures was not synchronized with task alert switch")
+	}
+	status, _ := panel.call(test, "PUT", "/api/system/alerts", Object{"loginFailureThreshold": 0}, panel.token)
+	if status != 400 {
+		test.Fatalf("invalid alert threshold accepted: %d", status)
+	}
+}
+
+func TestLoginAlerts(test *testing.T) {
+	panel := setupPanel(test)
+	requests := make(chan Object, 10)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload Object
+		if err := json.NewDecoder(request.Body).Decode(&payload); err == nil {
+			requests <- payload
+		}
+		writer.WriteHeader(200)
+	}))
+	defer server.Close()
+	panel.data(test, "PUT", "/api/system/notifications", Object{"notifyFailures": true, "channels": []Object{{"type": "webhook", "name": "告警测试", "enabled": true, "url": server.URL}}})
+	panel.data(test, "PUT", "/api/system/alerts", Object{
+		"taskFailures":          true,
+		"backupFailures":        false,
+		"updateFailures":        false,
+		"loginFailures":         true,
+		"loginFailureThreshold": 2,
+		"loginNewIP":            true,
+		"loginBlacklist":        true,
+	})
+	if err := panel.app.store.setSetting(ipBlacklistKey, "198.51.100.9"); err != nil {
+		test.Fatal(err)
+	}
+	status, _ := panel.callRemote(test, "POST", "/api/user/login", "198.51.100.9:40000", Object{"username": "admin", "password": "wrong"}, "")
+	if status != 403 {
+		test.Fatalf("blacklisted login status %d", status)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		status, _ = panel.callRemote(test, "POST", "/api/user/login", "198.51.100.10:40000", Object{"username": "admin", "password": "wrong"}, "")
+		if status != 401 {
+			test.Fatalf("failed login %d: %d", attempt, status)
+		}
+	}
+	status, response := panel.callRemote(test, "POST", "/api/user/login", "198.51.100.11:40000", Object{"username": "admin", "password": "test-password-123"}, "")
+	if status != 200 {
+		test.Fatalf("new IP login: %d %v", status, response)
+	}
+	titles := map[string]bool{}
+	deadline := time.After(8 * time.Second)
+	for len(titles) < 3 {
+		select {
+		case payload := <-requests:
+			titles[text(payload["title"])] = true
+		case <-deadline:
+			test.Fatalf("login alerts missing: %v", titles)
+		}
+	}
+	for _, want := range []string{"异常登录：黑名单拦截", "异常登录：连续失败", "异常登录：新 IP 登录成功"} {
+		if !titles[want] {
+			test.Fatalf("missing alert %s: %v", want, titles)
 		}
 	}
 }

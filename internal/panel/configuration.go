@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true", "npmMirror": "", "pythonMirror": "", "linuxMirror": "", "pythonPath": "", "pythonVersion": "", "runtimePythonMirror": "", "runtimeNodeMirror": "", "runtimeGitMirror": "", "runtimeMambaMirror": "", "runtimeMambaChannel": "", "trustedProxies": "", "outboundAllowlist": "", "autoInstallDeps": "false", "allowUnsignedUpdates": "false", "ipLocationEnabled": "true", "ipLocationURL": "", "autoBackupEnabled": "false", "autoBackupTime": "03:00"}
+var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true", "npmMirror": "", "pythonMirror": "", "linuxMirror": "", "pythonPath": "", "pythonVersion": "", "runtimePythonMirror": "", "runtimeNodeMirror": "", "runtimeGitMirror": "", "runtimeMambaMirror": "", "runtimeMambaChannel": "", "trustedProxies": "", "outboundAllowlist": "", "autoInstallDeps": "false", "allowUnsignedUpdates": "false", "ipLocationEnabled": "true", "ipLocationURL": "", "autoBackupEnabled": "false", "autoBackupTime": "03:00", "autoBackupCleanupEnabled": "true", "autoBackupKeepDays": "30", "autoBackupCleanupTime": "04:00"}
 
 func (app *App) settings() Object {
 	result := Object{}
@@ -29,12 +29,12 @@ func (app *App) saveSettings(body Object) error {
 			return fmt.Errorf("不支持的设置项: %s", key)
 		}
 		switch key {
-		case "concurrency", "timeout", "retentionDays":
+		case "concurrency", "timeout", "retentionDays", "autoBackupKeepDays":
 			maximum := int64(32)
 			if key == "timeout" {
 				maximum = 604800
 			}
-			if key == "retentionDays" {
+			if key == "retentionDays" || key == "autoBackupKeepDays" {
 				maximum = 3650
 			}
 			number := integer(value)
@@ -49,15 +49,15 @@ func (app *App) saveSettings(body Object) error {
 			if text(value) != "" && !validHTTP(text(value)) {
 				return errors.New("Webhook 地址无效")
 			}
-		case "notifyFailures", "autoInstallDeps", "allowUnsignedUpdates", "ipLocationEnabled", "autoBackupEnabled":
+		case "notifyFailures", "autoInstallDeps", "allowUnsignedUpdates", "ipLocationEnabled", "autoBackupEnabled", "autoBackupCleanupEnabled":
 			if text(value) != "true" && text(value) != "false" {
 				return fmt.Errorf("%s 只能为 true 或 false", key)
 			}
-		case "autoBackupTime":
-			// 每日自动备份时间，形如 03:00。
+		case "autoBackupTime", "autoBackupCleanupTime":
+			// 每日自动备份/清理时间，形如 03:00。
 			parsed, err := time.Parse("15:04", strings.TrimSpace(text(value)))
 			if err != nil || parsed.Format("15:04") != strings.TrimSpace(text(value)) {
-				return errors.New("自动备份时间格式应为 HH:MM，例如 03:00")
+				return fmt.Errorf("%s 格式应为 HH:MM，例如 03:00", key)
 			}
 		case "npmMirror", "pythonMirror", "linuxMirror", "runtimePythonMirror", "runtimeNodeMirror", "runtimeGitMirror", "runtimeMambaMirror":
 			if address := strings.TrimSpace(text(value)); address != "" && !validHTTP(address) {

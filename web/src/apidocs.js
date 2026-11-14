@@ -60,7 +60,7 @@ export const apiGroups = [
       },
       {
         id: 'system-notify-log', method: 'GET', path: '/system/notify-log', tabs: apiOnly,
-        summary: '通知日志', description: '仅管理员，最多保留最近 100 条。source 为 system（系统通知）或 script（脚本通知）；status：0 成功、1 失败；notifyType 为推送渠道类型。',
+        summary: '通知日志', description: '仅管理员，最多保留最近 100 条。source 为 system（系统通知）、alert（告警）或 script（脚本通知）；status：0 成功、1 失败；notifyType 为推送渠道类型。',
         response: { code: 200, data: [{ id: 1, timestamp: 1794400064694, title: '大白菜面板', content: '这是一条测试通知。', status: 0, notifyType: 'webhook', source: 'system', scriptName: '' }] },
       },
       {
@@ -691,7 +691,7 @@ export const apiGroups = [
       },
       {
         id: 'system-settings-put', method: 'PUT', path: '/system/settings', tabs: apiOnly,
-        summary: '保存系统设置', description: '支持部分更新：concurrency（1–32）/ timeout（1–604800 秒）/ retentionDays（1–3650）/ githubRepo / webhookURL / notifyFailures / npmMirror / pythonMirror / linuxMirror / pythonPath / pythonVersion / autoInstallDeps / autoBackupEnabled / autoBackupTime（HH:MM）/ allowUnsignedUpdates / ipLocationEnabled / ipLocationURL / trustedProxies / outboundAllowlist。镜像与归属地接口为 HTTP(S) URL，留空使用默认源；pythonPath 需为存在的文件，pythonVersion 形如 3.11；可信代理与黑名单会拒绝过宽网段和会封禁当前来源的条目。未知键会返回 400。',
+        summary: '保存系统设置', description: '支持部分更新：concurrency（1–32）/ timeout（1–604800 秒）/ retentionDays（1–3650）/ githubRepo / webhookURL / notifyFailures / npmMirror / pythonMirror / linuxMirror / pythonPath / pythonVersion / autoInstallDeps / autoBackupEnabled / autoBackupTime（HH:MM）/ autoBackupCleanupEnabled / autoBackupKeepDays（1–3650）/ autoBackupCleanupTime（HH:MM）/ allowUnsignedUpdates / ipLocationEnabled / ipLocationURL / trustedProxies / outboundAllowlist。镜像与归属地接口为 HTTP(S) URL，留空使用默认源；pythonPath 需为存在的文件，pythonVersion 形如 3.11；可信代理与黑名单会拒绝过宽网段和会封禁当前来源的条目。未知键会返回 400。',
         body: { concurrency: '8', timeout: '3600', retentionDays: '30', npmMirror: 'https://registry.npmmirror.com', pythonMirror: 'https://pypi.tuna.tsinghua.edu.cn/simple', linuxMirror: 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu/', pythonPath: '', pythonVersion: '3.11' },
         response: { code: 200, data: null },
       },
@@ -714,6 +714,17 @@ export const apiGroups = [
         id: 'system-notifications-put', method: 'PUT', path: '/system/notifications', tabs: apiOnly,
         summary: '保存通知配置', description: 'channels 项字段：type（webhook/wecom/dingtalk/feishu/bark/telegram/pushplus/serverchan）、name、enabled、url、token、secret、chatId。',
         body: { notifyFailures: true, channels: [{ type: 'wecom', name: '企业微信', enabled: true, url: '', token: '', secret: '', chatId: '' }] },
+        response: { code: 200, data: null },
+      },
+      {
+        id: 'system-alerts-get', method: 'GET', path: '/system/alerts', tabs: apiOnly,
+        summary: '读取告警配置', description: '仅管理员。taskFailures 与通知配置中的 notifyFailures 同步；登录告警带冷却去重。',
+        response: { code: 200, data: { taskFailures: true, backupFailures: true, updateFailures: true, loginFailures: true, loginFailureThreshold: 5, loginNewIP: true, loginBlacklist: true } },
+      },
+      {
+        id: 'system-alerts-put', method: 'PUT', path: '/system/alerts', tabs: apiOnly,
+        summary: '保存告警配置', description: 'taskFailures 同步 notifyFailures；loginFailureThreshold 为 1–100。告警复用已启用的通知渠道。',
+        body: { taskFailures: true, backupFailures: true, updateFailures: true, loginFailures: true, loginFailureThreshold: 5, loginNewIP: true, loginBlacklist: true },
         response: { code: 200, data: null },
       },
       {
@@ -807,7 +818,7 @@ export const apiGroups = [
     id: 'backups',
     label: '备份恢复',
     icon: 'DatabaseBackup',
-    intro: '仅管理员。备份包含任务、变量、应用、账号、配置、脚本和最近运行记录；导入前自动创建安全备份。',
+    intro: '仅管理员。备份包含任务、变量、应用、账号、配置、脚本和最近运行记录；可按内容创建、从历史列表直接恢复，并在导入/恢复前自动创建安全备份。自动备份保存在 data/backups/auto，按保留天数和清理时间自动清理。',
     endpoints: [
       {
         id: 'backups-list', method: 'GET', path: '/backups', tabs: apiOnly,
@@ -816,8 +827,15 @@ export const apiGroups = [
       },
       {
         id: 'backups-export', method: 'POST', path: '/backups/export', tabs: apiOnly,
-        summary: '创建备份', description: '生成 ZIP，返回备份文件名。运行和排队任务需清空。',
+        summary: '创建备份', description: '生成 ZIP，返回备份文件名。运行和排队任务需清空。可选 scripts/config/logs/runs 选择备份内容；任务、变量、应用、账号与设置始终包含。',
+        body: { scripts: true, config: true, logs: false, runs: false },
         response: { code: 200, data: { name: 'cabbage-20261004.zip' } },
+      },
+      {
+        id: 'backups-restore', method: 'POST', path: '/backups/restore', tabs: apiOnly,
+        summary: '从历史列表恢复', description: '按文件名恢复本地备份，自动备份传 auto=true。恢复前自动创建安全备份，恢复后撤销所有会话；备份未包含的内容保持现状。',
+        body: { name: 'cabbage-20261004.zip', auto: false },
+        response: { code: 200, data: { safetyBackup: 'cabbage-20261004-120000-abcd1234.zip', message: '恢复成功，请重新登录；依赖请在依赖管理中重新安装' } },
       },
       {
         id: 'backups-download', method: 'GET', path: '/backups/:name.zip', tabs: apiOnly,

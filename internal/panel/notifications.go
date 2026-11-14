@@ -31,6 +31,16 @@ type NotificationConfig struct {
 	Channels       []NotificationChannel `json:"channels"`
 }
 
+type AlertConfig struct {
+	TaskFailures          bool `json:"taskFailures"`
+	BackupFailures        bool `json:"backupFailures"`
+	UpdateFailures        bool `json:"updateFailures"`
+	LoginFailures         bool `json:"loginFailures"`
+	LoginFailureThreshold int  `json:"loginFailureThreshold"`
+	LoginNewIP            bool `json:"loginNewIP"`
+	LoginBlacklist        bool `json:"loginBlacklist"`
+}
+
 var notificationTypes = []string{"webhook", "wecom", "dingtalk", "feishu", "bark", "telegram", "pushplus", "serverchan"}
 
 func (app *App) notificationConfig() NotificationConfig {
@@ -102,6 +112,150 @@ func (app *App) saveNotifications(config NotificationConfig) error {
 		}
 	}
 	return transaction.Commit()
+}
+
+func defaultAlertConfig() AlertConfig {
+	return AlertConfig{
+		TaskFailures:          true,
+		BackupFailures:        true,
+		UpdateFailures:        true,
+		LoginFailures:         true,
+		LoginFailureThreshold: 5,
+		LoginNewIP:            true,
+		LoginBlacklist:        true,
+	}
+}
+
+func (app *App) alertConfig() AlertConfig {
+	config := defaultAlertConfig()
+	if value := app.store.setting("alertConfig", ""); value != "" {
+		_ = json.Unmarshal([]byte(value), &config)
+	}
+	// 任务告警沿用原有的 notifyFailures，避免两个开关互相矛盾。
+	config.TaskFailures = app.store.setting("notifyFailures", "true") != "false"
+	if config.LoginFailureThreshold < 1 || config.LoginFailureThreshold > 100 {
+		config.LoginFailureThreshold = 5
+	}
+	return config
+}
+
+func (app *App) saveAlertConfig(config AlertConfig) error {
+	if config.LoginFailureThreshold < 1 || config.LoginFailureThreshold > 100 {
+		return errors.New("连续登录失败阈值需为 1–100")
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	transaction, err := app.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	for key, value := range map[string]string{"alertConfig": string(data), "notifyFailures": fmt.Sprint(config.TaskFailures)} {
+		if _, err := transaction.Exec("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
+			return err
+		}
+	}
+	return transaction.Commit()
+}
+
+func (app *App) alertsAPI(writer http.ResponseWriter, request *http.Request) {
+	switch request.Method {
+	case "GET":
+		ok(writer, app.alertConfig())
+	case "PUT":
+		var config AlertConfig
+		if err := decode(request, &config); err != nil {
+			apiError(writer, err)
+			return
+		}
+		if err := app.saveAlertConfig(config); err != nil {
+			apiError(writer, err)
+			return
+		}
+		ok(writer, nil)
+	default:
+		fail(writer, 405, "方法不支持")
+	}
+}
+
+// alertAsync 通过已有通知渠道发送告警，不阻塞调用方。
+func (app *App) alertAsync(title, message string) {
+	config := app.notificationConfig()
+	enabled := false
+	for _, channel := range config.Channels {
+		if channel.Enabled {
+			enabled = true
+			break
+		}
+	}
+	if !enabled {
+		return
+	}
+	go func() {
+		results := app.sendNotifications(context.Background(), title, message, config)
+		app.recordNotifyLog(title, message, results, "alert", "")
+	}()
+}
+
+// alertCooldown 对同类告警做去重，避免登录失败等事件刷屏。
+func (app *App) alertCooldown(key string, window time.Duration) bool {
+	app.alertMu.Lock()
+	defer app.alertMu.Unlock()
+	if app.alertCooldowns == nil {
+		app.alertCooldowns = map[string]time.Time{}
+	}
+	now := time.Now()
+	if last, found := app.alertCooldowns[key]; found && now.Sub(last) < window {
+		return false
+	}
+	app.alertCooldowns[key] = now
+	if len(app.alertCooldowns) > 512 {
+		for existing, stamp := range app.alertCooldowns {
+			if now.Sub(stamp) > 24*time.Hour {
+				delete(app.alertCooldowns, existing)
+			}
+		}
+	}
+	return true
+}
+
+func (app *App) loginAlertMessage(action, ip, platform, username string, failures int) string {
+	ip = clipText(strings.TrimSpace(ip), 64)
+	platform = clipText(strings.TrimSpace(platform), 32)
+	username = clipText(strings.TrimSpace(username), 64)
+	location := ""
+	if cached, found := ipLocationCache.Load(ip); found {
+		location = text(cached)
+	}
+	if location == "" {
+		location = loginAddress(ip)
+	}
+	if location == "" {
+		location = "未知"
+	}
+	lines := []string{
+		"时间：" + time.Now().Format("2006-01-02 15:04:05"),
+		"事件：" + action,
+		"IP：" + ip + "（" + location + "）",
+		"设备：" + platform,
+	}
+	if username != "" {
+		lines = append(lines, "账号："+username)
+	}
+	if failures > 0 {
+		lines = append(lines, fmt.Sprintf("失败次数：%d（15 分钟窗口）", failures))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func clipText(value string, limit int) string {
+	runes := []rune(value)
+	if limit <= 0 || len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "…"
 }
 
 func (app *App) notificationsAPI(writer http.ResponseWriter, request *http.Request) {

@@ -291,7 +291,7 @@
 .field i { font-style: normal; color: var(--red); margin-left: 4px; }
 .field input, .field select, .field textarea { width: 100%; font-size: 12px; }
 .field small { font-size: 10px; line-height: 1.7; color: var(--ink-faint); font-weight: 400; }
-.field.checkbox { display: grid; grid-template-columns: 1fr auto; gap: 7px; }
+.field.checkbox { display: grid; grid-template-columns: auto 1fr; gap: 7px; align-items: start; }
 .field.checkbox input { width: 16px; height: 16px; }
 .field.checkbox small { grid-column: 1 / -1; }
 

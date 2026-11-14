@@ -23,6 +23,16 @@ func parseIP(value string) net.IP {
 	return net.ParseIP(strings.Trim(value, "[]"))
 }
 
+// publicIP 判断地址是否为可用于登录告警的公网地址。
+func publicIP(value string) bool {
+	ip := parseIP(value)
+	if ip == nil {
+		return false
+	}
+	return !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() &&
+		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast()
+}
+
 // trustedProxy 判断来源地址是否在设置的可信反向代理列表中。
 // 只有来自这些地址的请求才允许信任 X-Forwarded-For / X-Real-IP。
 func (app *App) trustedProxy(ip net.IP) bool {

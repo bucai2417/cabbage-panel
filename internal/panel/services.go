@@ -101,6 +101,10 @@ func (app *App) systemAPI(writer http.ResponseWriter, request *http.Request, tai
 		app.notificationsAPI(writer, request)
 		return
 	}
+	if tail == "alerts" {
+		app.alertsAPI(writer, request)
+		return
+	}
 	// 青龙 GET /api/system/notify-log：通知发送日志。
 	if tail == "notify-log" && request.Method == "GET" {
 		ok(writer, app.notifyLogs())

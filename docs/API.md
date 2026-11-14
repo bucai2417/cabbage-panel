@@ -12,7 +12,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | --- | --- | --- |
 | token | POST /open/auth/token | JSON 请求体 client_id、client_secret；可选 expiresIn（60–2592000 秒，默认 7200）或 permanent:true；token、token_type、expiration（Unix 秒，0 表示永久）、expiresIn、permanent。凭证不接受 URL 查询参数 |
 | 登录日志 | GET /api/user/login-log | 仅管理员；数组项 timestamp（毫秒）、address、ip、platform（mobile/desktop）、status（0 成功、1 失败），最多保留 100 条 |
-| 通知日志 | GET /api/system/notify-log | 仅管理员；数组项 id、timestamp、title、content、status（0 成功、1 失败）、notifyType、source（system/script）、scriptName，最多保留 100 条 |
+| 通知日志 | GET /api/system/notify-log | 仅管理员；数组项 id、timestamp、title、content、status（0 成功、1 失败）、notifyType、source（system/alert/script）、scriptName，最多保留 100 条 |
 | 系统日志 | GET / DELETE /api/system/log | GET 返回系统运行日志文本（末尾最多 2MB）；DELETE 清空 |
 | 任务列表 | GET /crons | searchValue/page/size；/api 与 /open 的 data 直接是 CronItem 数组，不嵌套分页对象 |
 | 任务详情 | GET /crons/:id | 数字 ID |
@@ -140,9 +140,10 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | GET /api/logs/run/:runId | {content,status}，尾部最多 2MB |
 | GET /api/logs/stream?id=runId | SSE log/status 事件 |
 | DELETE /api/logs | 青龙语义 {filename,path} 删除单个日志；也兼容 ID 数组删除运行记录 |
-| GET /api/backups | 本地备份列表 |
-| POST /api/backups/export | 创建 ZIP，返回 name |
-| GET / DELETE /api/backups/:name.zip | 下载 / 删除 |
+| GET /api/backups | 本地备份列表（含大小、创建时间、auto 标记） |
+| POST /api/backups/export | 创建 ZIP，可传 scripts/config/logs/runs 选择内容 |
+| POST /api/backups/restore | 按 {name, auto} 从历史列表恢复 |
+| GET / DELETE /api/backups/:name.zip | 下载 / 删除；自动备份附加 ?auto=1 |
 | POST /api/backups/import | multipart file 或 application/zip |
 | GET /api/system/update | GitHub 最新稳定 Release；`latest` 已去掉 v 前缀 |
 | POST /api/system/update/download | 后台下载验证，返回 runId |
@@ -169,6 +170,8 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | GET /api/system/notifications | 读取通知配置，管理员权限 |
 | PUT /api/system/notifications | 保存 {notifyFailures:boolean,channels:[{type,name,enabled,url,token,secret,chatId}]} |
 | POST /api/system/notifications | 测试已保存且启用的渠道，返回逐渠道 success/error |
+| GET /api/system/alerts | 读取告警配置，管理员权限 |
+| PUT /api/system/alerts | 保存 {taskFailures,backupFailures,updateFailures,loginFailures,loginFailureThreshold,loginNewIP,loginBlacklist}；告警复用通知渠道 |
 
 configs/detail 与 configs PUT 支持虚拟 system.json、notifications.json，保存会验证并立即更新 SQLite。history/restore 也会应用配置，恢复前保存当前内容。GET /api/system/settings 与系统配置文件共用数据。
 

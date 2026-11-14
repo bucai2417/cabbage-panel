@@ -242,6 +242,9 @@ func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tai
 					state.Version = strings.TrimPrefix(app.store.setting("stagedVersion", ""), "v")
 				}
 			})
+			if err != nil && app.alertConfig().UpdateFailures && !strings.Contains(err.Error(), "最新") {
+				app.alertAsync("更新失败", "时间："+time.Now().Format("2006-01-02 15:04:05")+"\n错误："+err.Error())
+			}
 		}()
 		ok(writer, Object{"started": true})
 		return

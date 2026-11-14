@@ -46,8 +46,11 @@ type App struct {
 	runtimeState                               RuntimeProgress
 	autoBackupMu                               sync.Mutex
 	autoBackupLast                             string
+	autoCleanupLast                            string
 	autoBackupStop                             chan struct{}
 	autoBackupDone                             chan struct{}
+	alertMu                                    sync.Mutex
+	alertCooldowns                             map[string]time.Time
 	shutdown                                   chan struct{}
 	shutdownOnce                               sync.Once
 }
@@ -430,7 +433,11 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 		}
 		// 命中 IP 黑名单直接拒绝，并记录一次失败登录。
 		if app.ipBlocked(ip) {
-			app.store.recordLogin(ip, loginPlatform(request), loginAddress(ip), false)
+			platform := loginPlatform(request)
+			app.store.recordLogin(ip, platform, loginAddress(ip), false)
+			if app.alertConfig().LoginBlacklist && app.alertCooldown("login-blacklist:"+ip, time.Hour) {
+				app.alertAsync("异常登录：黑名单拦截", app.loginAlertMessage("登录请求被 IP 黑名单拦截", ip, platform, "", 0))
+			}
 			fail(writer, 403, "该 IP 已被加入黑名单")
 			return true
 		}
@@ -454,6 +461,12 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 			if passwordHash != "" {
 				app.store.recordLogin(ip, platform, loginAddress(ip), false)
 			}
+			if config := app.alertConfig(); config.LoginFailures {
+				failures := app.limitCount(accountKey)
+				if failures >= config.LoginFailureThreshold && app.alertCooldown("login-failure:"+accountKey, 15*time.Minute) {
+					app.alertAsync("异常登录：连续失败", app.loginAlertMessage("账号连续登录失败", ip, platform, username, failures))
+				}
+			}
 			fail(writer, 401, "用户名或密码错误")
 			return true
 		}
@@ -468,6 +481,9 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 			return true
 		}
 		http.SetCookie(writer, &http.Cookie{Name: "cabbage_session", Value: token, HttpOnly: true, Secure: app.isHTTPS(request), SameSite: http.SameSiteStrictMode, Path: "/", MaxAge: int(ttl / time.Second)})
+		if config := app.alertConfig(); config.LoginNewIP && publicIP(ip) && !app.store.loginIPSeen(ip) && app.alertCooldown("login-newip:"+ip, 6*time.Hour) {
+			app.alertAsync("异常登录：新 IP 登录成功", app.loginAlertMessage("账号在新的公网 IP 登录成功", ip, platform, username, 0))
+		}
 		app.store.recordLogin(ip, platform, loginAddress(ip), true)
 		ok(writer, Object{"token": token, "token_type": "Bearer", "expiration": time.Now().Add(ttl).Unix(), "username": username})
 		return true

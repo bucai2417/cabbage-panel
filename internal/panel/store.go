@@ -374,6 +374,15 @@ func (store *Store) recordLogin(ip, platform, address string, success bool) {
 	_, _ = store.db.Exec("INSERT INTO login_logs(timestamp,address,ip,platform,status) VALUES(?,?,?,?,?)", time.Now().UnixMilli(), address, ip, platform, status)
 }
 
+// loginIPSeen 判断该 IP 是否在最近登录记录中成功登录过。
+func (store *Store) loginIPSeen(ip string) bool {
+	var count int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM login_logs WHERE ip=? AND status=0", ip).Scan(&count); err != nil {
+		return true
+	}
+	return count > 0
+}
+
 // loginLogs 返回最近的登录记录；与青龙一致，只保留 100 条。
 func (store *Store) loginLogs() ([]Object, error) {
 	_, _ = store.db.Exec("DELETE FROM login_logs WHERE id NOT IN (SELECT id FROM login_logs ORDER BY timestamp DESC, id DESC LIMIT 100)")
