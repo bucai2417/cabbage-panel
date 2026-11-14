@@ -457,7 +457,7 @@
 
 @keyframes modal-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
 
-/* 登录页「保持登录」 */
-.login-remember { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ink-body); flex-wrap: wrap; cursor: pointer; }
+/* 登录页「保持登录 / 记住密码」 */
+.login-remember-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.login-remember { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ink-body); cursor: pointer; }
 .login-remember input { width: 15px; height: 15px; margin: 0; flex-shrink: 0; accent-color: var(--green); }
-.login-remember small { flex-basis: 100%; padding-left: 22px; font-size: 10px; color: var(--ink-faint); }

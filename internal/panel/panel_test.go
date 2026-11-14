@@ -209,15 +209,37 @@ func TestAuthScopesAndMCP(test *testing.T) {
 	}
 	_, response = panel.call(test, "POST", "/mcp", Object{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, token)
 	listedTools := response["result"].(map[string]any)["tools"].([]any)
-	if len(listedTools) != 10 {
+	if len(listedTools) != 12 {
 		test.Fatalf("unexpected tool access %d", len(listedTools))
 	}
 	names := map[string]bool{}
 	for _, entry := range listedTools {
 		names[text(entry.(map[string]any)["name"])] = true
 	}
-	if !names["get_task"] || !names["read_task_source"] {
-		test.Fatalf("task read tools missing: %v", names)
+	for _, name := range []string{"get_task", "read_task_source", "get_api_docs", "get_script_rules"} {
+		if !names[name] {
+			test.Fatalf("MCP tool missing %s: %v", name, names)
+		}
+	}
+	_, response = panel.call(test, "POST", "/mcp", Object{"jsonrpc": "2.0", "id": 21, "method": "tools/call", "params": Object{"name": "get_script_rules", "arguments": Object{}}}, token)
+	rules := response["result"].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if !strings.Contains(text(rules["text"]), "cron") || !strings.Contains(text(rules["text"]), "new Env") {
+		test.Fatalf("script rules content missing: %v", rules)
+	}
+	_, response = panel.call(test, "POST", "/mcp", Object{"jsonrpc": "2.0", "id": 22, "method": "tools/call", "params": Object{"name": "get_api_docs", "arguments": Object{}}}, token)
+	docs := response["result"].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if !strings.Contains(text(docs["text"]), "/healthz") {
+		test.Fatal("api docs content missing known endpoint")
+	}
+	_, response = panel.call(test, "POST", "/mcp", Object{"jsonrpc": "2.0", "id": 23, "method": "resources/list"}, token)
+	resources := response["result"].(map[string]any)["resources"].([]any)
+	if len(resources) != 2 {
+		test.Fatalf("unexpected MCP resources: %v", resources)
+	}
+	_, response = panel.call(test, "POST", "/mcp", Object{"jsonrpc": "2.0", "id": 24, "method": "resources/read", "params": Object{"uri": "cabbage://script-rules"}}, token)
+	contents := response["result"].(map[string]any)["contents"].([]any)
+	if len(contents) != 1 || !strings.Contains(text(contents[0].(map[string]any)["text"]), "cron") {
+		test.Fatalf("resource read mismatch: %v", contents)
 	}
 	_, response = panel.call(test, "POST", "/mcp", Object{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": Object{"name": "create_task", "arguments": Object{"name": "MCP 中文任务", "command": "echo MCP", "schedule": ""}}}, token)
 	if response["result"].(map[string]any)["isError"] != false {
@@ -994,6 +1016,24 @@ func TestMCPExtendedTools(test *testing.T) {
 	if remaining != 0 {
 		test.Fatal("delete_runs did not remove the run")
 	}
+}
+
+func TestSystemActivityCountsRunningTasks(test *testing.T) {
+	panel := setupPanel(test)
+	id := panel.task(test, "活动任务", "sleep 5", nil)
+	runID := panel.run(test, id)
+	waitUntil(test, 5*time.Second, func() bool {
+		data, ok := panel.data(test, "GET", "/api/system/activity", nil).(map[string]any)
+		return ok && integer(data["running"]) > 0
+	})
+	panel.data(test, "PUT", "/api/crons/stop", []int64{id})
+	if result := panel.finished(test, runID); result["status"] != "cancelled" {
+		test.Fatal(result)
+	}
+	waitUntil(test, 5*time.Second, func() bool {
+		data, ok := panel.data(test, "GET", "/api/system/activity", nil).(map[string]any)
+		return ok && integer(data["running"]) == 0
+	})
 }
 
 func TestMain(main *testing.M) {

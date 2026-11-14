@@ -56,7 +56,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | 依赖详情 | GET /dependencies/:id | 含最新安装日志 |
 | 依赖操作 | PUT /dependencies/reinstall,cancel | ID 数组 |
 | 移除记录 | DELETE /dependencies/force | ID 数组，不卸载文件 |
-| 订阅管理 | GET / POST / PUT / DELETE /subscriptions | POST/PUT 对象；type=git-repo/file、url、alias、name、schedule、branch、whitelist、blacklist、autoAddCron、autoDelCron |
+| 订阅管理 | GET / POST / PUT / DELETE /subscriptions | POST/PUT 对象；type=git-repo/file、url、alias、name、schedule、branch、whitelist、blacklist、autoAddCron、autoDelCron；autoAddCron 扫描脚本前 50 行注释中的 cron，任务名取脚本文件名 |
 | 订阅操作 | PUT /subscriptions/run,stop,enable,disable | ID 数组 |
 | 订阅日志 | GET /subscriptions/:id/log、/:id/logs | 最新文本 / 运行数组 |
 | 应用管理 | GET / POST / PUT / DELETE /api/apps | name/scopes/expiresAt；创建返回 client_id/client_secret（secret 只返回一次）；列表与详情不返回 client_secret，数据库仅保存散列 |
@@ -122,6 +122,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | POST /api/user/login | {username,password} |
 | POST /api/user/logout | 撤销当前会话 |
 | GET / PUT /api/user | 账号查询 / 修改，修改需要 oldPassword |
+| GET /api/system/activity | 轻量活动状态：running、queued、active |
 | GET /api/system/stats | 真实资源、统计和最近任务 |
 | GET /api/system/runtimes | Python/Node/Bash/Git/npm 检测，含来源与可安装标记 |
 | POST /api/system/runtimes/install | {name} 一键安装便携运行时；容器内或有任务运行时返回 409 |
@@ -150,7 +151,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | POST /api/system/update/apply | 替换程序，返回 restartRequired=true |
 
 更新校验：构建嵌入了 Ed25519 发布公钥时强制校验清单签名；未嵌入公钥的构建退化为仅校验清单与程序的 SHA-256（依赖 GitHub HTTPS），并在进度信息中提示未签名。替换程序后按运行环境自动重启：Windows 使用 PowerShell 看守脚本（兼容中文路径），容器/systemd 退出交由外部拉起。
-| POST /mcp | JSON-RPC initialize/ping/tools/list/tools/call |
+| POST /mcp | JSON-RPC initialize/ping/tools/list/tools/call/resources/list/resources/read；35 个工具，资源 cabbage://api-docs、cabbage://script-rules |
 
 ## v1.1 扩展接口
 

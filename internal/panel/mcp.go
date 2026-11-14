@@ -56,6 +56,8 @@ func tools() []Tool {
 		{"install_dependency", "新增并异步安装依赖；type 0 Node.js、1 Python、2 系统包", "dependencies", "POST", "/dependencies", Object{"name": stringField("包名"), "type": Object{"type": "integer", "minimum": 0, "maximum": 2}, "remark": stringField("备注")}, []string{"name", "type"}, false},
 		{"reinstall_dependencies", "重新安装指定依赖", "dependencies", "PUT", "/dependencies/reinstall", Object{"ids": idsField}, []string{"ids"}, true},
 		{"delete_dependencies", "卸载并删除指定依赖", "dependencies", "DELETE", "/dependencies", Object{"ids": idsField}, []string{"ids"}, true},
+		{"get_api_docs", "读取大白菜面板完整接口文档清单（JSON），包含方法、路径、参数和示例", "mcp", "GET", "mcp://api-docs", Object{}, []string{}, false},
+		{"get_script_rules", "读取青龙/大白菜面板脚本写法规则：cron 注释、new Env、运行环境、通知助手和接口调用约定", "mcp", "GET", "mcp://script-rules", Object{}, []string{}, false},
 	}
 }
 
@@ -117,7 +119,7 @@ func (app *App) mcp(writer http.ResponseWriter, request *http.Request, principal
 		if !contains([]string{"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}, version) {
 			version = "2025-11-25"
 		}
-		result = Object{"protocolVersion": version, "capabilities": Object{"tools": Object{"listChanged": false}}, "serverInfo": Object{"name": "cabbage-panel", "version": app.version}, "instructions": "大白菜面板：执行命令会访问主机资源。仅在用户授权后调用写入、执行和删除工具。"}
+		result = Object{"protocolVersion": version, "capabilities": Object{"tools": Object{"listChanged": false}, "resources": Object{"listChanged": false, "subscribe": false}}, "serverInfo": Object{"name": "cabbage-panel", "version": app.version}, "instructions": "大白菜面板：执行命令会访问主机资源。仅在用户授权后调用写入、执行和删除工具。编写或修改脚本前先调用 get_script_rules（或读取资源 cabbage://script-rules）；调用面板 API 前先调用 get_api_docs（或读取资源 cabbage://api-docs）了解完整接口、权限和请求示例。"}
 	case "ping":
 		result = Object{}
 	case "tools/list":
@@ -167,6 +169,15 @@ func (app *App) mcp(writer http.ResponseWriter, request *http.Request, principal
 				rpcError(id, -32602, "未知参数 "+key)
 				return
 			}
+		}
+		if name == "get_api_docs" || name == "get_script_rules" {
+			text := string(mcpAPIDocsJSON)
+			if name == "get_script_rules" {
+				text = mcpScriptRules
+			}
+			result = Object{"content": []Object{{"type": "text", "text": text}}, "isError": false}
+			respond(writer, 200, Object{"jsonrpc": "2.0", "id": id, "result": result})
+			return
 		}
 		apiPath := strings.ReplaceAll(selected.Path, "{id}", text(arguments["id"]))
 		values := url.Values{}
@@ -219,7 +230,23 @@ func (app *App) mcp(writer http.ResponseWriter, request *http.Request, principal
 		data, _ := json.Marshal(response)
 		result = Object{"content": []Object{{"type": "text", "text": string(data)}}, "structuredContent": response, "isError": recorder.Code >= 400}
 	case "resources/list":
-		result = Object{"resources": []any{}}
+		result = Object{"resources": []Object{
+			{"uri": "cabbage://api-docs", "name": "大白菜面板接口文档", "description": "完整接口 JSON 清单，包含分组、方法、路径、参数、请求体和响应示例", "mimeType": "application/json"},
+			{"uri": "cabbage://script-rules", "name": "青龙脚本写法规则", "description": "脚本头部 cron/new Env 标记、运行环境、日志、通知助手和接口调用约定", "mimeType": "text/markdown"},
+		}}
+	case "resources/read":
+		uri := text(message.Params["uri"])
+		body, mime := "", ""
+		switch uri {
+		case "cabbage://api-docs":
+			body, mime = string(mcpAPIDocsJSON), "application/json"
+		case "cabbage://script-rules":
+			body, mime = mcpScriptRules, "text/markdown"
+		default:
+			rpcError(id, -32602, "未知资源: "+uri)
+			return
+		}
+		result = Object{"contents": []Object{{"uri": uri, "mimeType": mime, "text": body}}}
 	case "prompts/list":
 		result = Object{"prompts": []any{}}
 	default:

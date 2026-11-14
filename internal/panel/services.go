@@ -28,6 +28,13 @@ func verifyPassword(hashed, password string) error {
 }
 
 func (app *App) systemAPI(writer http.ResponseWriter, request *http.Request, tail string) {
+	if tail == "activity" && request.Method == "GET" {
+		var running, queued int
+		_ = app.store.db.QueryRow("SELECT COUNT(*) FROM runs WHERE status='running' AND kind='crons'").Scan(&running)
+		_ = app.store.db.QueryRow("SELECT COUNT(*) FROM runs WHERE status='queued' AND kind='crons'").Scan(&queued)
+		ok(writer, Object{"running": running, "queued": queued, "active": app.engine.active()})
+		return
+	}
 	if (tail == "" || tail == "stats") && request.Method == "GET" {
 		stats := Object{"version": app.version, "commit": app.commit, "uptime": int(time.Since(app.started).Seconds()), "platform": runtime.GOOS + "/" + runtime.GOARCH, "goVersion": runtime.Version(), "active": app.engine.active(), "mcp": "/mcp", "timezone": time.Now().Location().String()}
 		var tasks, today, success, failed, running, queued int
@@ -308,7 +315,97 @@ func (app *App) installDependency(ctx context.Context, item Object, writer io.Wr
 	return err
 }
 
-var embeddedCron = regexp.MustCompile("(?mi)(?:cron\\s*[:=]\\s*[\"']?|cron\\s+[\"'])([^\"'\\r\\n]+)")
+const scriptHeaderLineLimit = 50
+
+var cronAnnotationPattern = regexp.MustCompile(`(?i)@?cron\b\s*[:=]?\s*`)
+
+// scriptHeaderComments 提取脚本前 50 行的注释文本，支持 #、// 与块注释。
+func scriptHeaderComments(content string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > scriptHeaderLineLimit {
+		lines = lines[:scriptHeaderLineLimit]
+	}
+	var builder strings.Builder
+	inBlock := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if inBlock {
+			if index := strings.Index(trimmed, "*/"); index >= 0 {
+				builder.WriteString(strings.TrimSpace(trimmed[:index]))
+				builder.WriteByte('\n')
+				inBlock = false
+				rest := strings.TrimSpace(trimmed[index+2:])
+				if strings.HasPrefix(rest, "//") {
+					builder.WriteString(strings.TrimSpace(rest[2:]))
+					builder.WriteByte('\n')
+				}
+			} else {
+				builder.WriteString(strings.TrimPrefix(trimmed, "*"))
+				builder.WriteByte('\n')
+			}
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmed, "/*"):
+			rest := strings.TrimSpace(trimmed[2:])
+			if index := strings.Index(rest, "*/"); index >= 0 {
+				builder.WriteString(strings.TrimSpace(rest[:index]))
+				builder.WriteByte('\n')
+			} else {
+				inBlock = true
+				builder.WriteString(rest)
+				builder.WriteByte('\n')
+			}
+		case strings.HasPrefix(trimmed, "//"):
+			builder.WriteString(strings.TrimSpace(trimmed[2:]))
+			builder.WriteByte('\n')
+		case strings.HasPrefix(trimmed, "#"):
+			builder.WriteString(strings.TrimSpace(trimmed[1:]))
+			builder.WriteByte('\n')
+		}
+	}
+	return builder.String()
+}
+
+// scriptHeaderCron 从脚本头部注释中提取第一条可解析的 cron 表达式。
+func scriptHeaderCron(content string) string {
+	for _, line := range strings.Split(scriptHeaderComments(content), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		location := cronAnnotationPattern.FindStringIndex(line)
+		if location == nil {
+			continue
+		}
+		value := strings.TrimSpace(line[location[1]:])
+		value = strings.TrimSpace(strings.TrimSuffix(value, "*/"))
+		if value == "" {
+			continue
+		}
+		if value[0] == '"' || value[0] == '\'' {
+			if end := strings.IndexByte(value[1:], value[0]); end >= 0 {
+				value = value[1 : 1+end]
+			}
+		}
+		value = strings.TrimSpace(strings.TrimRight(value, ";"))
+		if _, err := scheduleParser.Parse(value); err == nil {
+			return value
+		}
+		// 常见写法会在表达式后附带脚本名或注释，依次尝试 6 段、5 段前缀。
+		fields := strings.Fields(value)
+		for _, count := range []int{6, 5} {
+			if len(fields) < count {
+				continue
+			}
+			candidate := strings.Join(fields[:count], " ")
+			if _, err := scheduleParser.Parse(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
 
 func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Writer) error {
 	alias := text(item["alias"])
@@ -396,6 +493,11 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 		}
 	}
 	current := map[string]bool{}
+	tasks, _ := app.store.list("crons")
+	byCommand := map[string]Object{}
+	for _, task := range tasks {
+		byCommand[text(task["command"])] = task
+	}
 	for relative, content := range files {
 		targetName := alias + "/" + relative
 		target, err := safePath(filepath.Join(app.root, "scripts"), targetName)
@@ -408,24 +510,29 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 		current[targetName] = true
 		fmt.Fprintln(writer, "同步", targetName)
 		if boolean(item["autoAddCron"]) {
-			match := embeddedCron.FindStringSubmatch(content)
-			if len(match) > 1 {
-				spec := strings.TrimSpace(match[1])
-				if _, err := scheduleParser.Parse(spec); err == nil {
-					command := "task " + shellQuote(targetName)
-					tasks, _ := app.store.list("crons")
-					exists := false
-					for _, task := range tasks {
-						if text(task["command"]) == command {
-							exists = true
-							break
+			if spec := scriptHeaderCron(content); spec != "" {
+				command := "task " + shellQuote(targetName)
+				taskName := filepath.Base(relative)
+				if existing, found := byCommand[command]; found {
+					if integer(existing["subscriptionId"]) == integer(item["id"]) {
+						if text(existing["schedule"]) != spec {
+							saved, err := app.store.save("crons", Object{"id": existing["id"], "schedule": spec})
+							if err != nil {
+								return err
+							}
+							byCommand[command] = saved
+							fmt.Fprintf(writer, "更新任务计划 %s（%s）\n", text(existing["name"]), spec)
 						}
+					} else {
+						fmt.Fprintf(writer, "任务已存在，跳过自动创建：%s\n", command)
 					}
-					if !exists {
-						if _, err := app.store.save("crons", defaults("crons", Object{"name": relative, "command": command, "schedule": spec, "subscriptionId": item["id"]})); err != nil {
-							return err
-						}
+				} else {
+					saved, err := app.store.save("crons", defaults("crons", Object{"name": taskName, "command": command, "schedule": spec, "subscriptionId": item["id"]}))
+					if err != nil {
+						return err
 					}
+					byCommand[command] = saved
+					fmt.Fprintf(writer, "自动创建任务 %s（%s）\n", taskName, spec)
 				}
 			}
 		}

@@ -21,7 +21,7 @@
 .apidocs-layout { display: grid; grid-template-columns: 222px minmax(0, 1fr); gap: 22px; align-items: start; }
 .apidocs-body { min-width: 0; }
 
-.apidocs-nav { position: sticky; top: 18px; align-self: start; display: flex; flex-direction: column; gap: 3px; background: #fff; border: 1px solid #edf1f4; border-radius: 16px; padding: 10px; box-shadow: var(--shadow); max-height: calc(100vh - 36px); overflow-y: auto; }
+.apidocs-nav { position: sticky; top: 121px; align-self: start; display: flex; flex-direction: column; gap: 3px; background: #fff; border: 1px solid #edf1f4; border-radius: 16px; padding: 10px; box-shadow: var(--shadow); max-height: calc(100vh - 137px); overflow-y: auto; }
 .apidocs-nav button { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: none; padding: 9px 11px; border-radius: 9px; font-size: 12px; color: #75867f; text-align: left; }
 .apidocs-nav button:hover { background: #f2f9f5; color: #18966a; }
 .apidocs-nav button.active { background: #eaf7f1; color: #128a60; font-weight: 600; }
@@ -31,7 +31,7 @@
 .apidocs-nav button em { margin-left: auto; font-style: normal; font-size: 10px; color: #a6b2ab; }
 .apidocs-nav-empty { font-size: 11px; color: #a3b0a9; padding: 10px; }
 
-.apidocs-group { margin-bottom: 28px; scroll-margin-top: 18px; }
+.apidocs-group { margin-bottom: 28px; scroll-margin-top: 125px; }
 .apidocs-group:last-child { margin-bottom: 4px; }
 .apidocs-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
 .apidocs-group-head h2 { display: flex; align-items: center; gap: 10px; font-size: 15px; }
@@ -130,3 +130,6 @@
   .endpoint-head { padding: 12px 13px; }
   .endpoint-body { padding: 14px; }
 }
+@media (max-width: 1120px) { .apidocs-group { scroll-margin-top: 115px; } }
+@media (max-width: 760px) { .apidocs-group { scroll-margin-top: 112px; } }
+@media (max-width: 700px) { .apidocs-group { scroll-margin-top: 108px; } }

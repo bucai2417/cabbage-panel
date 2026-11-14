@@ -555,7 +555,7 @@ export const apiGroups = [
     id: 'subscriptions',
     label: '订阅同步',
     icon: 'GitBranch',
-    intro: '订阅 HTTP(S) Git 仓库或单文件。type 取 git-repo、file；alias 只能包含字母、数字、下划线和连字符。应用需要 subscriptions 权限。',
+    intro: '订阅 HTTP(S) Git 仓库或单文件。type 取 git-repo、file；alias 只能包含字母、数字、下划线和连字符。开启 autoAddCron 后扫描脚本前 50 行注释中的 cron 声明，按脚本文件名创建或更新任务；new Env 仅表示变量名，不会自动创建变量。',
     endpoints: [
       {
         id: 'subs-list', method: 'GET', path: '/subscriptions', scope: 'subscriptions', tabs: openAndApi,
@@ -570,7 +570,7 @@ export const apiGroups = [
       },
       {
         id: 'subs-create', method: 'POST', path: '/subscriptions', scope: 'subscriptions', tabs: openAndApi,
-        summary: '新增订阅', description: 'URL 必须是不含内嵌凭证的 HTTP(S) 地址；schedule 留空表示仅手动同步。',
+        summary: '新增订阅', description: 'URL 必须是不含内嵌凭证的 HTTP(S) 地址；schedule 留空表示仅手动同步。autoAddCron 支持 # cron "0 8 * * *"、// cron: ... 和块注释；任务名取脚本文件名。',
         body: { name: '脚本仓库', type: 'git-repo', url: 'https://github.com/owner/repo.git', alias: 'repo', branch: 'main', schedule: '0 */6 * * *', whitelist: '', blacklist: '', autoAddCron: true, autoDelCron: false },
         response: { code: 200, data: { id: 1, name: '脚本仓库' } },
       },
@@ -664,6 +664,11 @@ export const apiGroups = [
     icon: 'Settings2',
     intro: '仅管理员可用；开放应用（/open）没有 system 权限，调用会返回 403。',
     endpoints: [
+      {
+        id: 'system-activity', method: 'GET', path: '/system/activity', tabs: apiOnly,
+        summary: '轻量活动状态', description: '返回当前运行中 / 排队的定时任务数量，用于面板侧边栏徽标轮询。',
+        response: { code: 200, data: { running: 1, queued: 0, active: 1 } },
+      },
       {
         id: 'system-stats', method: 'GET', path: '/system/stats', tabs: apiOnly,
         summary: '资源与执行统计', description: '真实 CPU、内存、磁盘、面板堆内存、执行统计、近 7 天系列和最近 6 条运行。',
@@ -862,7 +867,7 @@ export const apiGroups = [
     endpoints: [
       {
         id: 'mcp-call', method: 'POST', path: '/mcp', absolute: true, tabs: apiOnly,
-        summary: 'MCP JSON-RPC', description: '无状态 Streamable HTTP，支持 initialize、ping、tools/list、tools/call，以及返回空列表的 resources/list、prompts/list。当前提供 33 个工具（任务详情与源码、变量更新删除、脚本历史/移动/删除、订阅 CRUD、依赖安装/重装/卸载、日志查询与删除），复用应用与资源权限。Header 需带 Authorization: Bearer <token>，Content-Type 必须为 application/json。',
+        summary: 'MCP JSON-RPC', description: '无状态 Streamable HTTP，支持 initialize、ping、tools/list、tools/call、resources/list、resources/read，以及返回空列表的 prompts/list。当前提供 35 个工具（任务详情与源码、变量更新删除、脚本历史/移动/删除、订阅 CRUD、依赖安装/重装/卸载、日志查询与删除、接口文档与脚本规则），并提供资源 cabbage://api-docs、cabbage://script-rules；复用应用与资源权限。Header 需带 Authorization: Bearer <token>，Content-Type 必须为 application/json。',
         body: { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
         response: { code: 200, data: { jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'list_crons', description: '列出定时任务' }] } } },
       },

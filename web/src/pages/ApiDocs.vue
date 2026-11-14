@@ -101,7 +101,7 @@ function trackActiveGroup() {
     .map(group => ({ id: group.id, el: document.getElementById('apidocs-' + group.id) }))
     .filter(item => item.el)
   if (!marks.length) return
-  const line = 140
+  const line = 130
   let current = marks[0].id
   for (const mark of marks) {
     if (mark.el.getBoundingClientRect().top <= line) current = mark.id
