@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="大白菜面板纯前端交互演示：无需后端，所有操作只发生在当前页面。">
+  <title>大白菜面板 · 在线演示</title>
+  <link rel="icon" href="logo.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="demo-shell">
+    <div class="scrim" id="scrim" data-action="close-menu"></div>
+
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="#" data-nav="dashboard" aria-label="返回仪表盘">
+        <img class="brand-logo" src="logo.png" alt="大白菜面板" width="38" height="38">
+        <span class="brand-text"><strong>大白菜面板</strong><small>CABBAGE PANEL</small></span>
+      </a>
+      <div class="nav-caption">工作空间</div>
+      <nav id="nav" aria-label="主导航"></nav>
+      <div class="sidebar-bottom">
+        <div class="service-status">
+          <span class="live-dot"></span>
+          <div><strong>演示模式</strong><small>无后端 · 数据仅在本页</small></div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main-shell">
+      <header class="topbar">
+        <button class="icon-btn mobile-menu" data-action="menu" aria-label="打开导航"><span data-icon="menu"></span></button>
+        <form class="global-search" id="global-search-form" autocomplete="off">
+          <span class="search-icon" data-icon="search"></span>
+          <input id="global-search" placeholder="搜索任务、命令、关键词…" aria-label="搜索任务">
+          <kbd>Ctrl K</kbd>
+          <div class="search-pop" id="search-pop" hidden></div>
+        </form>
+        <div class="topbar-right">
+          <span class="demo-pill" title="纯前端演示，不会访问后端">DEMO</span>
+          <span class="topbar-date" id="today"></span>
+          <button class="icon-btn bell-btn" data-action="notice" aria-label="查看通知">
+            <span data-icon="bell"></span><span class="notice-dot"></span>
+          </button>
+          <span class="avatar">B</span>
+          <span class="user-name">admin</span>
+        </div>
+      </header>
+
+      <nav class="page-tabs" aria-label="已打开页面">
+        <div class="tabs-track" id="tabs" role="tablist"></div>
+        <div class="tabs-actions">
+          <button class="icon-btn" id="tabs-more" data-action="tab-menu" aria-label="标签页操作"><span data-icon="more"></span></button>
+          <div class="tabs-menu" id="tabs-menu" hidden>
+            <button data-action="close-others"><span data-icon="x"></span>关闭其他</button>
+            <button data-action="close-all"><span data-icon="dashboard"></span>关闭全部</button>
+            <button data-action="reset-demo"><span data-icon="refresh"></span>重置演示</button>
+          </div>
+        </div>
+      </nav>
+
+      <main id="view" aria-live="polite"></main>
+      <footer class="page-footer">
+        <span>大白菜面板 · 在线体验</span>
+        <span>纯前端静态演示 · 不连接服务器</span>
+      </footer>
+    </div>
+  </div>
+
+  <div id="modal-root"></div>
+  <div class="toast-stack" id="toast-root" aria-live="polite"></div>
+  <noscript><div class="noscript">此演示需要启用 JavaScript。</div></noscript>
+  <script src="app.js"></script>
+</body>
+</html>
