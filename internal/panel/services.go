@@ -83,6 +83,15 @@ func (app *App) systemAPI(writer http.ResponseWriter, request *http.Request, tai
 		app.runtimeProgressAPI(writer, request)
 		return
 	}
+	// 关于页：运行环境信息与面板重启。
+	if tail == "about" && request.Method == "GET" {
+		ok(writer, app.aboutInfo())
+		return
+	}
+	if tail == "restart" && request.Method == "POST" {
+		app.restartAPI(writer, request)
+		return
+	}
 	// 公告内容：服务端代理远端 tz.json，多源回退，失败返回空文本。
 	if tail == "notice" && request.Method == "GET" {
 		app.noticeAPI(writer, request)

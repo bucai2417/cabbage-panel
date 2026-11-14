@@ -376,6 +376,8 @@
   transition: background .2s var(--ease);
 }
 .task-row:hover { background: var(--surface-raised); }
+.task-row.disabled { background: #f7f8f7; }
+.task-row.disabled:hover { background: #f2f4f2; }
 .task-row:last-child { border-bottom: 0; }
 .task-row.running {
   background: linear-gradient(90deg, rgba(23, 201, 138, .07), transparent 62%);
@@ -652,6 +654,10 @@
 
 /* 环境变量长按拖动排序 */
 tr[data-env-id] { touch-action: pan-y; }
+.env-table tbody tr.row-disabled { background: #f7f8f7; }
+.env-table tbody tr.row-disabled:hover { background: #f1f3f1; }
+.env-table tbody tr.row-disabled.selected-row,
+.env-table tbody tr.row-disabled.selected-row:hover { background: #ecf8f1; }
 body.env-dragging { user-select: none; cursor: grabbing; touch-action: none; }
 body.env-dragging tr[data-env-id] { cursor: grabbing; }
 .dragging-row {
@@ -726,3 +732,14 @@ body.env-dragging tr[data-env-id] { cursor: grabbing; }
   .about-heading h2 { font-size: 19px; }
   .about-body { padding: 18px; }
 }
+
+/* 日志停止按钮 */
+.stop-log-button { color: var(--red); background: var(--red-soft); }
+.stop-log-button:hover { background: #fbe0dc; color: var(--red); }
+.icon-button.stop-run-inline { color: var(--red); }
+.icon-button.stop-run-inline:hover { background: var(--red-soft); color: var(--red); }
+
+/* 关于页操作区 */
+.about-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.about-arch { color: var(--ink-faint); font-weight: 400; margin-left: 5px; }
+.about-meta-wide { grid-column: 1 / -1; }

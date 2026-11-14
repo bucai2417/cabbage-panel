@@ -9,9 +9,24 @@ const content = ref(''), status = ref(''), runs = ref([]), activeId = ref(props.
 const visibleContent = computed(() => query.value ? content.value.split('\n').filter(line => line.toLowerCase().includes(query.value.toLowerCase())).join('\n') : content.value)
 const selectedRun = computed(() => runs.value.find(run => run.id === activeId.value))
 async function loadHistory() { if (!props.taskId) return; runs.value = await api('/logs/runs?kind=' + props.kind + '&taskId=' + props.taskId + '&limit=500'); if (!activeId.value && runs.value.length) activeId.value = runs.value[0].id; lastHistory.value = Date.now() }
-async function loadContent(force = false) { const id = activeId.value; if (!id || (!force && !['running', 'queued', ''].includes(status.value))) return; try { const result = await api('/logs/run/' + id); if (id !== activeId.value) return; content.value = result.content || (['queued', 'running'].includes(result.status) ? '任务等待执行或尚未输出…' : '本次执行没有日志输出。'); status.value = result.status; error.value = ''; if (follow.value && !window.getSelection()?.toString()) { await nextTick(); if (terminal.value) terminal.value.scrollTop = terminal.value.scrollHeight } } catch (failure) { if (id === activeId.value) error.value = failure.message } }
+async function loadContent(force = false) {
+  const id = activeId.value
+  if (!id || (!force && !['running', 'queued', ''].includes(status.value))) return
+  try {
+    const result = await api('/logs/run/' + id)
+    if (id !== activeId.value) return
+    const previousTop = terminal.value ? terminal.value.scrollTop : 0
+    content.value = result.content || (['queued', 'running'].includes(result.status) ? '任务等待执行或尚未输出…' : '本次执行没有日志输出。')
+    status.value = result.status
+    error.value = ''
+    await nextTick()
+    if (!terminal.value) return
+    if (follow.value && !window.getSelection()?.toString()) terminal.value.scrollTop = terminal.value.scrollHeight
+    else terminal.value.scrollTop = previousTop
+  } catch (failure) { if (id === activeId.value) error.value = failure.message }
+}
 usePolling(async () => { if (props.taskId && Date.now() - lastHistory.value > 5000) await loadHistory(); await loadContent() }, 1500)
-watch(activeId, async () => { content.value = ''; status.value = ''; loading.value = true; await loadContent(true); loading.value = false })
+watch(activeId, async () => { content.value = ''; status.value = ''; follow.value = true; loading.value = true; await loadContent(true); loading.value = false })
 watch(() => props.runId, value => { if (value) activeId.value = value })
 watch(status, value => emit('status', value))
 // 检测日志末尾是否在等待输入（Python input()、Node readline、Shell read 等）。
@@ -29,6 +44,12 @@ const waitingInput = computed(() => {
   const promptLike = /[:：?？>]\s*$/.test(lastLine) || /^(请输入|input|enter|password|username)/i.test(lastLine)
   return noTrailingNewline || promptLike
 })
+// 手动上滑离开底部后暂停自动跟随，滑回底部再恢复，避免边看历史边被拽到底。
+function onTerminalScroll() {
+  const element = terminal.value
+  if (!element) return
+  follow.value = element.scrollHeight - element.scrollTop - element.clientHeight < 24
+}
 async function sendInput() {
   if (stdinBusy.value || !activeId.value) return
   const value = stdinValue.value
@@ -57,8 +78,8 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', keyboard); if (!pr
 <template>
   <div :class="embedded ? 'log-embedded' : 'overlay log-overlay'" @mousedown.self="!embedded && $emit('close')"><section ref="container" :class="embedded ? 'terminal-wrap' : 'modal log-modal'" :role="embedded ? 'region' : 'dialog'" :aria-modal="!embedded" :aria-label="title">
     <header v-if="!embedded"><div class="actions"><button class="icon-button" aria-label="关闭日志" @click="$emit('close')"><Icon name="X" /></button></div></header>
-    <div class="log-controls"><label v-if="taskId" class="log-history-select">历史记录<select v-model="activeId" aria-label="选择历史日志"><option v-if="!runs.length" :value="0">暂无运行记录</option><option v-for="run in runs" :key="run.id" :value="run.id">#{{ run.id }} · {{ date(run.started || run.created) }} · {{ statusLabel[run.status] }} · {{ run.duration?.toFixed(2) || '0' }}s</option></select></label><input v-model="query" aria-label="搜索日志内容" placeholder="筛选日志行…" /><label class="inline-check"><input v-model="follow" type="checkbox" />跟随输出</label><a v-if="activeId" class="small-button" :href="'/api/logs/download/' + activeId" download>下载完整日志</a></div>
-    <div class="terminal-shell"><pre ref="terminal" class="terminal" tabindex="0">{{ error || (loading ? '正在加载…' : visibleContent || (query ? '没有匹配的日志行' : '暂无运行记录')) }}</pre><button class="terminal-copy" aria-label="复制日志" title="复制日志" @click="copy(content)"><Icon name="Copy" :size="15" /></button></div>
+    <div class="log-controls"><label v-if="taskId" class="log-history-select">历史记录<select v-model="activeId" aria-label="选择历史日志"><option v-if="!runs.length" :value="0">暂无运行记录</option><option v-for="run in runs" :key="run.id" :value="run.id">#{{ run.id }} · {{ date(run.started || run.created) }} · {{ statusLabel[run.status] }} · {{ run.duration?.toFixed(2) || '0' }}s</option></select></label><input v-model="query" aria-label="搜索日志内容" placeholder="筛选日志行…" /><label class="inline-check"><input v-model="follow" type="checkbox" />跟随输出</label><button v-if="stoppable && ['running', 'queued'].includes(status)" class="small-button stop-log-button" @click="$emit('stop', activeId)"><Icon name="Square" :size="14" />停止</button><a v-if="activeId" class="small-button" :href="'/api/logs/download/' + activeId" download>下载完整日志</a></div>
+    <div class="terminal-shell"><pre ref="terminal" class="terminal" tabindex="0" @scroll="onTerminalScroll">{{ error || (loading ? '正在加载…' : visibleContent || (query ? '没有匹配的日志行' : '暂无运行记录')) }}</pre><button class="terminal-copy" aria-label="复制日志" title="复制日志" @click="copy(content)"><Icon name="Copy" :size="15" /></button></div>
     <form v-if="waitingInput" class="stdin-bar" @submit.prevent="sendInput"><span class="stdin-hint"><Icon name="Terminal" :size="15" />程序等待输入</span><input v-model="stdinValue" class="stdin-input" placeholder="输入内容后回车发送…" aria-label="标准输入" autocomplete="off" spellcheck="false" :disabled="stdinBusy" /><button class="button primary compact" :disabled="stdinBusy"><Icon :name="stdinBusy ? 'LoaderCircle' : 'Send'" :size="15" :class="{ spin: stdinBusy }" />发送</button></form>
     <footer><span class="muted">{{ selectedRun ? '退出码 ' + (selectedRun.exitCode ?? '—') + ' · ' : '' }}UTF-8 · 运行中自动刷新</span><span class="muted">预览末尾 2 MB · 历史最多 500 次</span></footer>
   </section></div>

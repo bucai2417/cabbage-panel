@@ -2,9 +2,11 @@
 
 仅本地编译和打包请先阅读 [构建与打包](BUILD.md)；交给其他 Agent 继续开发请阅读 [开发接手指南](DEVELOPMENT.md)。本文的 tag 和 Release 流程供所有者授权发布后使用，当前不执行对外发布。
 
-## 签名配置
+## 签名配置（可选）
 
-在受信任本机执行一次：
+默认无需任何密钥：Actions 会生成 `manifest.json` 和 SHA-256，应用更新时只校验 SHA-256（依赖 GitHub HTTPS）。个人自托管、自用场景足够。
+
+如需更强的防篡改能力，可启用 Ed25519 验签。在受信任本机执行一次：
 
     node scripts/release-sign.mjs keygen
 
@@ -15,7 +17,7 @@ GitHub Settings → Secrets and variables → Actions：
 - Secret RELEASE_PRIVATE_KEY：私钥 PEM 的完整多行内容。
 - Variable CABBAGE_UPDATE_PUBLIC_KEY：输出的公钥。
 
-公钥在构建时嵌入 Go 程序，不允许普通后台设置替换。正式签名身份由项目所有者生成与保管，仓库没有预设私钥。
+公钥在构建时嵌入 Go 程序，不允许普通后台设置替换。正式签名身份由项目所有者生成与保管，仓库没有预设私钥。启用后，带公钥的版本会拒绝未签名或校验失败的更新。
 
 ## 发布流程
 
@@ -23,17 +25,17 @@ GitHub Settings → Secrets and variables → Actions：
 2. 通过 CI 并审查变更。
 3. 推送与 VERSION 对应的 tag，例如 v1.0.0。
 4. Workflow 构建 Linux amd64/arm64、Windows amd64、macOS arm64。
-5. 生成含使用文档的 ZIP 包，发布程序、ZIP、manifest.json、manifest.sig、SHA256SUMS。
+5. 生成含使用文档的 ZIP 包，发布程序、ZIP、manifest.json、SHA256SUMS；配置了私钥时额外发布 manifest.sig。
 
-流水线检查 tag/version、公钥存在、私钥公钥匹配；缺失配置拒绝发布。此配置需推送到真实仓库后才能在 GitHub 执行，发布前按组织策略固定镜像 digest 和 Actions commit。
+流水线检查 tag/version；配置了私钥时校验私钥与公钥匹配。未配置密钥时发布未签名清单（更新仅校验 SHA-256）。此配置需推送到真实仓库后才能在 GitHub 执行，发布前按组织策略固定镜像 digest 和 Actions commit。
 
 ## 在线更新
 
-默认仓库为 bucai2417/cabbage-panel，可在系统设置中修改。检查更新 → 下载并验证。下载在后台执行，设置页显示真实下载进度（已接收字节 / 总字节与百分比）；使用嵌入公钥验证清单签名，再验证对应平台程序 SHA-256。
+默认仓库为 bucai2417/cabbage-panel，可在系统设置中修改。检查更新 → 下载并验证。下载在后台执行，设置页显示真实下载进度（已接收字节 / 总字节与百分比）；构建嵌入公钥时验证清单签名，再验证对应平台程序 SHA-256，未嵌入公钥时只校验 SHA-256。
 
 所有任务结束后点「应用并重启」：后端按运行环境选择重启方式——Windows 生成看守批处理、Linux/macOS 生成看守脚本，两者都在当前进程退出后替换程序并重新拉起；容器内直接就地替换程序后退出，依赖容器 restart 策略重启（程序目录只读时请改用新版本镜像重新部署）。替换失败会尝试回滚，旧程序保留为 .previous。原生部署需程序目录写权限；只有管理员可更新，应用 token 和 MCP 无权限。设置页侧栏会在检测到新版本时给出提示，点击直达更新页。
 
-首次发布前没有真实 Release，开发构建禁止未签名更新。更换签名身份需要旧密钥签名的过渡版本或人工分发，避免替换信任根。
+开发构建可以直接使用未签名更新（仅 SHA-256）。启用签名后，更换签名身份需要旧密钥签名的过渡版本或人工分发，避免替换信任根。
 
 数据与程序分开。升级前备份；未来 schema 迁移必须兼顾恢复，不应假设旧程序可直接读取新 schema。
 

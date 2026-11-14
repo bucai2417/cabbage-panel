@@ -210,7 +210,7 @@ func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tai
 			apiError(writer, err)
 			return
 		}
-		ok(writer, Object{"current": app.version, "latest": release.Tag, "available": newerVersion(release.Tag, app.version), "body": release.Body, "url": release.URL, "signedUpdates": app.updateKey != "", "staged": app.store.setting("stagedVersion", ""), "restartMode": restartMode()})
+		ok(writer, Object{"current": app.version, "latest": strings.TrimPrefix(release.Tag, "v"), "available": newerVersion(release.Tag, app.version), "body": release.Body, "url": release.URL, "signedUpdates": app.updateKey != "", "staged": app.store.setting("stagedVersion", ""), "restartMode": restartMode()})
 		return
 	}
 	if tail == "/progress" && request.Method == "GET" {
@@ -218,10 +218,7 @@ func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tai
 		return
 	}
 	if tail == "/download" && request.Method == "POST" {
-		if app.updateKey == "" {
-			fail(writer, 409, "当前构建未嵌入发布公钥；请先按发布文档配置签名构建")
-			return
-		}
+		// 未嵌入公钥的开发构建也允许更新：跳过签名，仅做 SHA-256 校验。
 		if app.currentUpdateProgress().Running {
 			fail(writer, 409, "已有更新正在下载，请稍候")
 			return
@@ -313,9 +310,14 @@ func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tai
 }
 
 func (app *App) stageUpdate(ctx context.Context, writer io.Writer) error {
-	key, err := base64.StdEncoding.DecodeString(app.updateKey)
-	if err != nil || len(key) != ed25519.PublicKeySize {
-		return errors.New("发布公钥无效")
+	// 嵌入发布公钥时强制验签；未嵌入时退化为仅校验 SHA-256（依赖 HTTPS）。
+	var key ed25519.PublicKey
+	if app.updateKey != "" {
+		decoded, err := base64.StdEncoding.DecodeString(app.updateKey)
+		if err != nil || len(decoded) != ed25519.PublicKeySize {
+			return errors.New("发布公钥无效")
+		}
+		key = decoded
 	}
 	app.reportUpdateProgress(func(state *UpdateProgress) { state.Phase = "检查最新版本" })
 	release, err := app.latestRelease(ctx)
@@ -330,22 +332,29 @@ func (app *App) stageUpdate(ctx context.Context, writer io.Writer) error {
 	if err != nil {
 		return err
 	}
-	signatureURL, err := releaseURL(release, "manifest.sig")
-	if err != nil {
-		return err
-	}
 	manifestData, err := app.fetchBytes(ctx, manifestURL, 1<<20)
 	if err != nil {
 		return err
 	}
-	signatureData, err := app.fetchBytes(ctx, signatureURL, 4096)
-	if err != nil {
-		return err
-	}
-	app.reportUpdateProgress(func(state *UpdateProgress) { state.Phase = "校验发布签名" })
-	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(signatureData)))
-	if err != nil || !ed25519.Verify(key, manifestData, signature) {
-		return errors.New("Release 签名校验失败，更新已拒绝")
+	if key != nil {
+		signatureURL, err := releaseURL(release, "manifest.sig")
+		if err != nil {
+			return err
+		}
+		signatureData, err := app.fetchBytes(ctx, signatureURL, 4096)
+		if err != nil {
+			return err
+		}
+		app.reportUpdateProgress(func(state *UpdateProgress) { state.Phase = "校验发布签名" })
+		signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(signatureData)))
+		if err != nil || !ed25519.Verify(key, manifestData, signature) {
+			return errors.New("Release 签名校验失败，更新已拒绝")
+		}
+	} else {
+		app.reportUpdateProgress(func(state *UpdateProgress) {
+			state.Phase = "校验 SHA-256"
+			state.Message = "未嵌入公钥：跳过签名，依赖 HTTPS 与 SHA-256 校验"
+		})
 	}
 	var manifest UpdateManifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {

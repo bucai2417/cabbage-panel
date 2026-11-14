@@ -126,6 +126,8 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | GET /api/system/runtimes | Python/Node/Bash/Git/npm 检测，含来源与可安装标记 |
 | POST /api/system/runtimes/install | {name} 一键安装便携运行时；容器内或有任务运行时返回 409 |
 | GET /api/system/runtimes/progress | 运行时安装进度 |
+| GET /api/system/about | 关于页信息：version、commit、go、os、arch、platform、osName、hostname、kernel、restartMode、signedUpdates |
+| POST /api/system/restart | 重启面板服务（有任务运行时返回 409）；容器/systemd 下退出交由外部拉起，原生环境由看守脚本重新拉起 |
 | GET / PUT /api/system/settings | concurrency/timeout/retentionDays/githubRepo/webhookURL/notifyFailures/npmMirror/pythonMirror/linuxMirror/pythonPath/pythonVersion/runtimePythonMirror/runtimeNodeMirror/runtimeGitMirror/runtimeMambaMirror/runtimeMambaChannel |
 | POST /api/system/python/rebuild | 用当前配置的 Python 重建 venv 并重装 Python 依赖；有任务运行时返回 409 |
 | GET / PUT / DELETE /api/user/ip-blacklist | IP 黑名单：GET 列表、PUT {ip} 添加、DELETE {ip} 移除；命中后无法登录 |
@@ -142,9 +144,11 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | POST /api/backups/export | 创建 ZIP，返回 name |
 | GET / DELETE /api/backups/:name.zip | 下载 / 删除 |
 | POST /api/backups/import | multipart file 或 application/zip |
-| GET /api/system/update | GitHub 最新稳定 Release |
+| GET /api/system/update | GitHub 最新稳定 Release；`latest` 已去掉 v 前缀 |
 | POST /api/system/update/download | 后台下载验证，返回 runId |
 | POST /api/system/update/apply | 替换程序，返回 restartRequired=true |
+
+更新校验：构建嵌入了 Ed25519 发布公钥时强制校验清单签名；未嵌入公钥的构建退化为仅校验清单与程序的 SHA-256（依赖 GitHub HTTPS），并在进度信息中提示未签名。替换程序后按运行环境自动重启：Windows 使用 PowerShell 看守脚本（兼容中文路径），容器/systemd 退出交由外部拉起。
 | POST /mcp | JSON-RPC initialize/ping/tools/list/tools/call |
 
 ## v1.1 扩展接口
@@ -161,6 +165,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | POST /api/logs/input | {"id":runId,"input":"一行文本"}；向调试任务的标准输入写入一行，用于 `input()` / `readline()` / `read` 等交互脚本 |
 | GET /api/crons/:id/source | 返回 {path,content}；应用同时需要 crons 与 scripts 权限；复杂命令返回明确错误 |
 | GET /api/logs/download/:runId | 以附件下载完整 UTF-8 日志 |
+| POST /api/logs/stop | {"id":runId}；按运行 ID 停止对应执行，kind 由运行记录自动判断（crons / scripts 等） |
 | GET /api/system/notifications | 读取通知配置，管理员权限 |
 | PUT /api/system/notifications | 保存 {notifyFailures:boolean,channels:[{type,name,enabled,url,token,secret,chatId}]} |
 | POST /api/system/notifications | 测试已保存且启用的渠道，返回逐渠道 success/error |

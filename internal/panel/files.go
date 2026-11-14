@@ -710,6 +710,29 @@ func (app *App) logsAPI(writer http.ResponseWriter, request *http.Request, tail 
 		ok(writer, nil)
 		return
 	}
+	// POST /api/logs/stop：按运行 ID 停止对应执行，kind 由运行记录决定。
+	if tail == "stop" && request.Method == "POST" {
+		var body struct {
+			ID int64 `json:"id"`
+		}
+		if err := decode(request, &body); err != nil {
+			apiError(writer, err)
+			return
+		}
+		if body.ID <= 0 {
+			fail(writer, 400, "缺少运行 ID")
+			return
+		}
+		var kind string
+		var taskID int64
+		if err := app.store.db.QueryRow("SELECT kind, task_id FROM runs WHERE id=?", body.ID).Scan(&kind, &taskID); err != nil {
+			apiError(writer, err)
+			return
+		}
+		app.engine.stop(kind, taskID, body.ID)
+		ok(writer, nil)
+		return
+	}
 	if request.Method != "GET" {
 		fail(writer, 405, "方法不支持")
 		return

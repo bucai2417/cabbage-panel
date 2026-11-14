@@ -390,6 +390,11 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 				}
 				return integer(l["id"]) > integer(r["id"])
 			}
+			// 环境变量按启用状态分组：启用在先，停用的单独排在下方；组内再按置顶、position 排序。
+			// position 在启停切换时保持不变，因此重新启用后会回到原位置。
+			if kind == "envs" && (integer(l["status"]) == 0) != (integer(r["status"]) == 0) {
+				return integer(l["status"]) == 0
+			}
 			if integer(l["isPinned"]) != integer(r["isPinned"]) {
 				return integer(l["isPinned"]) > integer(r["isPinned"])
 			}

@@ -6,10 +6,15 @@ import Icon from './Icon.vue'
 
 const emit = defineEmits(['close'])
 const items = ref([]), search = ref(''), loading = ref(true), saving = ref(false), editing = ref(null)
-const filtered = computed(() => items.value.filter(item => !search.value || JSON.stringify(item).toLowerCase().includes(search.value.toLowerCase())))
+function createdTime(item) { return new Date(item.createdAt || item.updatedAt || 0).getTime() || item.id }
+// 与资源页一致：启用在先、停用沉底，组内按置顶、position、创建时间排序。
+function sortEnvs(list) {
+  return [...list].sort((left, right) => Number(!!left.status) - Number(!!right.status) || Number(!!right.isPinned) - Number(!!left.isPinned) || Number(left.position || 0) - Number(right.position || 0) || createdTime(left) - createdTime(right) || left.id - right.id)
+}
+const filtered = computed(() => sortEnvs(items.value.filter(item => !search.value || JSON.stringify(item).toLowerCase().includes(search.value.toLowerCase()))))
 async function load() {
   loading.value = true
-  try { items.value = await api('/envs') } catch (error) { toast(error.message, 'error') } finally { loading.value = false }
+  try { items.value = sortEnvs(await api('/envs')) } catch (error) { toast(error.message, 'error') } finally { loading.value = false }
 }
 function add() { editing.value = { name: '', value: '', remarks: '' } }
 function edit(item) { editing.value = { ...item } }

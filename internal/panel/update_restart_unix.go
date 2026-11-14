@@ -6,9 +6,32 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
+
+// selfRestart 写守护脚本，在当前进程退出后重新拉起同一个程序（不替换文件）。
+func selfRestart(exe string, args []string) error {
+	script := filepath.Join(os.TempDir(), fmt.Sprintf("cabbage-restart-%d.sh", os.Getpid()))
+	var builder strings.Builder
+	builder.WriteString("#!/bin/sh\n")
+	fmt.Fprintf(&builder, "while kill -0 %d 2>/dev/null; do sleep 0.3; done\n", os.Getpid())
+	builder.WriteString("rm -f -- \"$0\"\n")
+	builder.WriteString("exec " + shellQuote(exe))
+	for _, arg := range args {
+		builder.WriteString(" " + shellQuote(arg))
+	}
+	builder.WriteString("\n")
+	if err := os.WriteFile(script, []byte(builder.String()), 0755); err != nil {
+		return err
+	}
+	command := exec.Command("/bin/sh", script)
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	command.Stdout = nil
+	command.Stderr = nil
+	return command.Start()
+}
 
 // nativeRestart 写新程序与守护脚本，脚本在当前进程退出后替换文件并重新拉起。
 func nativeRestart(exe string, data []byte, args []string) (string, error) {

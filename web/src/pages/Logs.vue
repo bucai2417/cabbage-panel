@@ -79,6 +79,12 @@ async function load() {
   if (activeRun.value) activeRun.value = records.value.find(run => run.id === activeRun.value.id) || null
   if (activeGroupKey.value && !activeRun.value) activeRun.value = groups.value.find(group => group.key === activeGroupKey.value)?.runs[0] || null
 }
+async function stopRun(runId) {
+  if (!runId || busy.value) return
+  busy.value = true
+  await action(async () => { await api('/logs/stop', 'POST', { id: runId }); await load() }, '已请求停止')
+  busy.value = false
+}
 usePolling(load, 5000)
 async function remove(ids) {
   if (busy.value || !ids.length) return
@@ -127,13 +133,14 @@ async function remove(ids) {
             <span class="log-run-time">{{ date(run.started || run.created) }}</span>
             <span class="log-run-meta">{{ Number(run.duration || 0).toFixed(2) }}s · 退出码 {{ run.exitCode ?? '—' }}</span>
           </button>
+          <button v-if="running(run)" class="icon-button stop-run-inline" aria-label="停止运行" title="停止运行" :disabled="busy" @click="stopRun(run.id)"><Icon name="Square" :size="15" /></button>
           <button class="icon-button danger" aria-label="删除日志" :disabled="busy || running(run)" @click="remove([run.id])"><Icon name="Trash2" :size="16" /></button>
         </div>
         <div v-if="!visibleRuns.length" class="empty-state compact-empty"><Icon name="FileClock" :size="28" /><h3>没有匹配的运行记录</h3><p>调整筛选条件后再试。</p></div>
         <footer class="pagination"><span>共 {{ filteredRuns.length }} 条 · 第 {{ runPage }} / {{ runPages }} 页</span><div><select v-model="runSize" aria-label="每页运行记录数量"><option :value="20">20 条 / 页</option><option :value="50">50 条 / 页</option><option :value="100">100 条 / 页</option></select><button class="icon-button" aria-label="上一页运行记录" :disabled="runPage === 1" @click="runPage--"><Icon name="ChevronLeft" :size="16" /></button><button class="icon-button" aria-label="下一页运行记录" :disabled="runPage === runPages" @click="runPage++"><Icon name="ChevronRight" :size="16" /></button></div></footer>
       </section>
       <section class="card log-viewer-card">
-        <LogPanel v-if="activeRun" :key="activeRun.id" :run-id="activeRun.id" :title="activeRun.name" embedded />
+        <LogPanel v-if="activeRun" :key="activeRun.id" :run-id="activeRun.id" :title="activeRun.name" embedded :stoppable="true" @stop="stopRun" />
         <div v-else class="empty-state compact-empty"><div class="empty-icon"><Icon name="Terminal" :size="28" /></div><h3>选择一条运行记录</h3><p>右侧会显示对应的完整运行日志。</p></div>
       </section>
     </div>

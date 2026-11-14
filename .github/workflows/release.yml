@@ -26,12 +26,9 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Validate version and signing configuration
-        env:
-          PUBLIC_KEY: ${{ vars.CABBAGE_UPDATE_PUBLIC_KEY }}
+      - name: Validate version
         run: |
           test "$GITHUB_REF_NAME" = "v$(tr -d '\r\n' < VERSION)"
-          test -n "$PUBLIC_KEY"
       - run: npm --prefix web ci && npm --prefix web run build
       - run: go test ./... -count=1 -timeout 120s
       - name: Build release
@@ -60,10 +57,14 @@ jobs:
           path: dist
           merge-multiple: true
       - run: node scripts/package.mjs
-      - run: node scripts/release-sign.mjs dist
+      - name: Note unsigned release
+        if: ${{ vars.CABBAGE_UPDATE_PUBLIC_KEY == '' }}
+        run: echo "::warning::CABBAGE_UPDATE_PUBLIC_KEY 未配置，本次发布未签名，更新仅校验 SHA-256。"
+      - name: Generate manifest (optional signature)
         env:
           RELEASE_PRIVATE_KEY: ${{ secrets.RELEASE_PRIVATE_KEY }}
           CABBAGE_UPDATE_PUBLIC_KEY: ${{ vars.CABBAGE_UPDATE_PUBLIC_KEY }}
+        run: node scripts/release-sign.mjs dist
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

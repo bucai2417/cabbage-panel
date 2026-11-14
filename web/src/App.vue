@@ -88,8 +88,8 @@ function persistRemember() {
 const navigation = [
   { id: 'dashboard', label: '仪表盘', icon: 'LayoutDashboard' },
   { id: 'tasks', label: '定时任务', icon: 'Clock3' },
-  { id: 'scripts', label: '脚本管理', icon: 'SquareTerminal' },
   { id: 'envs', label: '环境变量', icon: 'KeyRound' },
+  { id: 'scripts', label: '脚本管理', icon: 'SquareTerminal' },
   { id: 'logs', label: '运行日志', icon: 'FileText' },
   { id: 'subscriptions', label: '订阅管理', icon: 'GitBranch' },
   { id: 'dependencies', label: '依赖管理', icon: 'Package' },
@@ -146,7 +146,7 @@ async function onHash() {
 }
 function expired() { loggedIn.value = false; login.value.password = ''; error.value = '登录已过期，请重新登录' }
 let updateTimer = null
-async function checkUpdateHint() { if (!loggedIn.value) return; try { updateInfo.value = await api('/system/update') } catch { /* 未配置仓库或离线时静默忽略 */ } }
+async function checkUpdateHint() { if (!loggedIn.value) return; try { const info = await api('/system/update'); if (info && typeof info.latest === 'string') info.latest = info.latest.replace(/^v/i, ''); updateInfo.value = info } catch { /* 未配置仓库或离线时静默忽略 */ } }
 async function openUpdate() { settingsTab.value = 'about'; await navigate('settings') }
 watch(loggedIn, value => { if (value) { checkUpdateHint(); checkNotice() } })
 function keyboard(event) { if ((event.ctrlKey || event.metaKey) && event.key === 'k') { event.preventDefault(); document.querySelector('#global-search')?.focus() } }
