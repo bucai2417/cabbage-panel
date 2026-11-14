@@ -398,6 +398,18 @@ body.debug-open{overflow:hidden}
 .mcp-token-box{display:flex;flex-direction:column;gap:8px}
 .mcp-token-box textarea{font-family:Consolas,monospace;font-size:10px;line-height:1.5;color:#4f6d5b;background:#f7faf8}
 .mcp-token-box .actions{justify-content:flex-end}
+.mcp-token-list{display:flex;flex-direction:column;gap:7px}
+.mcp-token-row{border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden;transition:border-color .16s ease,box-shadow .16s ease}
+.mcp-token-row.active{border-color:rgba(23,201,138,.42);box-shadow:0 6px 18px -12px rgba(23,201,138,.6)}
+.mcp-token-head{display:flex;align-items:center;gap:9px;width:100%;padding:9px 12px;border:0;background:none;text-align:left;font-size:11px;color:var(--ink-body)}
+.mcp-token-head:hover{background:var(--surface-2)}
+.mcp-token-id{font:10px Consolas,monospace;color:var(--ink-faint);flex-shrink:0}
+.mcp-token-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:550}
+.mcp-token-created{margin-left:auto;font-size:9px;color:var(--ink-faint);white-space:nowrap}
+.mcp-token-body{display:flex;flex-direction:column;gap:8px;padding:0 12px 12px;border-top:1px solid var(--border-soft);margin-top:1px;padding-top:10px}
+.mcp-token-body textarea{width:100%;font-family:Consolas,monospace;font-size:10px;line-height:1.5;color:#4f6d5b;background:#f7faf8}
+.mcp-token-body .actions{justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.mcp-token-row .badge{flex-shrink:0}
 .token-form select{min-width:120px}
 
 /* 开放应用卡片列表 */

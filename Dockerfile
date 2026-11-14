@@ -14,7 +14,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /source/web/dist ./web/dist
-ARG VERSION=1.0.0
+ARG VERSION=1.0.1
 ARG COMMIT=dev
 ARG CABBAGE_UPDATE_PUBLIC_KEY=""
 RUN KEY="${CABBAGE_UPDATE_PUBLIC_KEY:-$(tr -d '\r\n' < update-public-key.txt 2>/dev/null)}" && \

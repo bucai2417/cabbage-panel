@@ -806,8 +806,9 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 				}
 			case "tokens":
 				if kind == "apps" && method == "GET" {
-					// 数据库只保存令牌散列，列表仅返回可管理元数据，不返回令牌本身。
-					rows, err := app.store.db.Query("SELECT id,name,created,expires,permanent FROM authorizations WHERE app_id=? ORDER BY id DESC", id)
+					// 列表返回解密后的明文令牌，方便管理员随时复制到 MCP 客户端。
+					app.purgeExpiredAuthorizations()
+					rows, err := app.store.db.Query("SELECT id,name,created,expires,permanent,token_secret FROM authorizations WHERE app_id=? ORDER BY id DESC", id)
 					if err != nil {
 						apiError(writer, err)
 						return
@@ -817,9 +818,15 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 					nowUnix := time.Now().Unix()
 					for rows.Next() {
 						var tokenID, expires, permanent int64
-						var name, created string
-						if rows.Scan(&tokenID, &name, &created, &expires, &permanent) == nil {
-							result = append(result, Object{"id": tokenID, "appId": id, "name": name, "created": created, "expires": expires, "permanent": permanent == 1, "active": permanent == 1 || expires > nowUnix})
+						var name, created, secret string
+						if rows.Scan(&tokenID, &name, &created, &expires, &permanent, &secret) == nil {
+							token := ""
+							if app.tokens != nil && secret != "" {
+								if plain, decryptErr := app.tokens.decrypt(secret); decryptErr == nil {
+									token = plain
+								}
+							}
+							result = append(result, Object{"id": tokenID, "appId": id, "name": name, "created": created, "expires": expires, "permanent": permanent == 1, "active": permanent == 1 || expires > nowUnix, "token": token})
 						}
 					}
 					ok(writer, result)

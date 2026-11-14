@@ -340,8 +340,12 @@ func TestAuditIPRemoteAndAppAuthorization(test *testing.T) {
 	var revokeID int64
 	for _, entry := range tokens {
 		item := entry.(map[string]any)
-		if text(item["token"]) != "" || text(item["secret_hash"]) != "" {
-			test.Fatal("authorization listing must not expose the token")
+		// 令牌以加密形式保存，列表接口返回解密后的明文，便于管理员随时查看。
+		if text(item["token"]) == "" {
+			test.Fatalf("authorization listing must expose the decrypted token: %v", item)
+		}
+		if text(item["secret_hash"]) != "" {
+			test.Fatal("authorization listing must not expose secret_hash")
 		}
 		// 限时令牌 expires 非 0；永久令牌 expires 为 0。
 		if integer(item["expires"]) != 0 && integer(item["expires"]) > time.Now().Unix() {
@@ -405,5 +409,90 @@ func TestAuditIPRemoteAndAppAuthorization(test *testing.T) {
 	}
 	if !found {
 		test.Fatal("login IP not recorded")
+	}
+}
+
+func TestTokenCipherRoundTripAndExpiryPurge(test *testing.T) {
+	panel := setupPanel(test)
+	cipherSet := panel.app.tokens
+	if cipherSet == nil {
+		test.Fatal("token cipher not initialized")
+	}
+	secret, err := cipherSet.encrypt("plain-token-value")
+	if err != nil {
+		test.Fatal(err)
+	}
+	if secret == "plain-token-value" || secret == "" {
+		test.Fatal("token was not encrypted")
+	}
+	plain, err := cipherSet.decrypt(secret)
+	if err != nil || plain != "plain-token-value" {
+		test.Fatalf("cipher round trip failed: %q %v", plain, err)
+	}
+	if _, err := cipherSet.decrypt("not-base64!!"); err == nil {
+		test.Fatal("corrupted ciphertext accepted")
+	}
+
+	app := panel.data(test, "POST", "/api/apps", Object{"name": "多令牌应用", "scopes": []string{"crons", "mcp"}}).(map[string]any)
+	appID := integer(app["id"])
+	// 生成三个令牌：两个限时、一个永久。
+	created := []string{}
+	for _, payload := range []Object{{"expiresIn": 3600}, {"expiresIn": 7200}, {"permanent": true}} {
+		result := panel.data(test, "POST", fmt.Sprintf("/api/apps/%d/token", appID), payload).(map[string]any)
+		created = append(created, text(result["token"]))
+	}
+	listed := panel.data(test, "GET", fmt.Sprintf("/api/apps/%d/tokens", appID), nil).([]any)
+	if len(listed) != 3 {
+		test.Fatalf("expected three authorizations: %v", listed)
+	}
+	seen := map[string]bool{}
+	for _, entry := range listed {
+		token := text(entry.(map[string]any)["token"])
+		if token == "" {
+			test.Fatal("token listing returned empty token")
+		}
+		seen[token] = true
+	}
+	for _, token := range created {
+		if !seen[token] {
+			test.Fatal("listed token does not match the issued token")
+		}
+	}
+	// 明文不应以原文形式落库。
+	var raw string
+	if err := panel.app.store.db.QueryRow("SELECT token_secret FROM authorizations WHERE app_id=? LIMIT 1", appID).Scan(&raw); err != nil {
+		test.Fatal(err)
+	}
+	for _, token := range created {
+		if raw == token {
+			test.Fatal("token stored in plaintext")
+		}
+	}
+
+	// 把一条令牌改成已过期，清理后应被删除，且会话同步失效。
+	var expiredID int64
+	var expiredHash string
+	if err := panel.app.store.db.QueryRow("SELECT id, token FROM authorizations WHERE app_id=? AND permanent=0 ORDER BY id LIMIT 1", appID).Scan(&expiredID, &expiredHash); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := panel.app.store.db.Exec("UPDATE authorizations SET expires=? WHERE id=?", time.Now().Add(-time.Hour).Unix(), expiredID); err != nil {
+		test.Fatal(err)
+	}
+	panel.app.purgeExpiredAuthorizations()
+	var remaining int
+	if err := panel.app.store.db.QueryRow("SELECT COUNT(*) FROM authorizations WHERE id=?", expiredID).Scan(&remaining); err != nil {
+		test.Fatal(err)
+	}
+	if remaining != 0 {
+		test.Fatal("expired authorization not purged")
+	}
+	if err := panel.app.store.db.QueryRow("SELECT COUNT(*) FROM sessions WHERE token=?", expiredHash).Scan(&remaining); err != nil {
+		test.Fatal(err)
+	}
+	if remaining != 0 {
+		test.Fatal("expired authorization session not removed")
+	}
+	if len(panel.data(test, "GET", fmt.Sprintf("/api/apps/%d/tokens", appID), nil).([]any)) != 2 {
+		test.Fatal("purge removed the wrong authorizations")
 	}
 }

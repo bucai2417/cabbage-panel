@@ -72,6 +72,10 @@ func openStore(root string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := ensureAuthorizationSecretColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := hashLegacyAuthorizations(db); err != nil {
 		db.Close()
 		return nil, err
@@ -116,6 +120,36 @@ func ensureAuditColumns(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// ensureAuthorizationSecretColumn 为 authorizations 表补充保存加密明文的列。
+// 旧版本只存散列，无法回看令牌；新列允许管理员随时查看。
+func ensureAuthorizationSecretColumn(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(authorizations)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	exists := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "token_secret" {
+			exists = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE authorizations ADD COLUMN token_secret TEXT NOT NULL DEFAULT ''")
+	return err
 }
 
 // hashLegacyAuthorizations 把旧版本明文保存的 Authorization 迁移为 SHA-256 散列。

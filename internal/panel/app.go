@@ -38,6 +38,7 @@ type App struct {
 	depMu                                      sync.Mutex
 	loginMu                                    sync.Mutex
 	attempts                                   map[string][]time.Time
+	tokens                                     *tokenCipher
 	client                                     *http.Client
 	started                                    time.Time
 	updateMu                                   sync.Mutex
@@ -65,6 +66,12 @@ func New(root, version, commit, updateKey string) (*App, error) {
 		return nil, err
 	}
 	app := &App{store: store, root: absolute, version: version, commit: commit, updateKey: updateKey, attempts: map[string][]time.Time{}, started: time.Now(), shutdown: make(chan struct{})}
+	cipherSet, err := loadTokenCipher(absolute)
+	if err != nil {
+		store.close()
+		return nil, err
+	}
+	app.tokens = cipherSet
 	app.client = newOutboundClient(app.outboundAllowed, 45*time.Second)
 	app.helperKey = randomToken()
 	for _, dir := range []string{"scripts", "logs", "config", "backups", "repos", "packages", "bin", "updates", "debug"} {
@@ -95,6 +102,7 @@ func New(root, version, commit, updateKey string) (*App, error) {
 	_, _ = store.db.Exec("UPDATE runs SET status='interrupted',finished=? WHERE status IN ('running','queued')", now())
 	_, _ = store.db.Exec("DELETE FROM sessions WHERE expires>0 AND expires<?", time.Now().Unix())
 	_, _ = store.db.Exec("DELETE FROM authorizations WHERE permanent=0 AND expires>0 AND expires<?", time.Now().Unix())
+	app.purgeExpiredAuthorizations()
 	if err := app.initializeConfigs(); err != nil {
 		store.close()
 		return nil, err
@@ -588,7 +596,15 @@ func (app *App) createAppToken(appID int64, appName string, ttl time.Duration, p
 		flag = 1
 	}
 	created := now()
-	result, err := app.store.db.Exec("INSERT INTO authorizations(app_id,token,name,created,expires,permanent) VALUES(?,?,?,?,?,?)", appID, hash(token), appName, created, expires, flag)
+	secret := ""
+	if app.tokens != nil {
+		secret, err = app.tokens.encrypt(token)
+		if err != nil {
+			_, _ = app.store.db.Exec("DELETE FROM sessions WHERE token=?", hash(token))
+			return "", nil, err
+		}
+	}
+	result, err := app.store.db.Exec("INSERT INTO authorizations(app_id,token,name,created,expires,permanent,token_secret) VALUES(?,?,?,?,?,?,?)", appID, hash(token), appName, created, expires, flag, secret)
 	if err != nil {
 		_, _ = app.store.db.Exec("DELETE FROM sessions WHERE token=?", hash(token))
 		return "", nil, err
@@ -596,6 +612,28 @@ func (app *App) createAppToken(appID int64, appName string, ttl time.Duration, p
 	id, _ := result.LastInsertId()
 	return token, Object{"id": id, "appId": appID, "name": appName, "token": token, "created": created, "expires": expires, "permanent": permanent, "expiresIn": int64(ttl / time.Second)}, nil
 }
+
+// purgeExpiredAuthorizations 删除已过期的非永久令牌及其会话。
+// 启动时和读取令牌列表时调用，保证过期令牌不会长期残留。
+func (app *App) purgeExpiredAuthorizations() {
+	nowUnix := time.Now().Unix()
+	rows, err := app.store.db.Query("SELECT token FROM authorizations WHERE permanent=0 AND expires>0 AND expires<?", nowUnix)
+	if err == nil {
+		hashes := []string{}
+		for rows.Next() {
+			var value string
+			if rows.Scan(&value) == nil {
+				hashes = append(hashes, value)
+			}
+		}
+		_ = rows.Close()
+		for _, value := range hashes {
+			_, _ = app.store.db.Exec("DELETE FROM sessions WHERE token=?", value)
+		}
+	}
+	_, _ = app.store.db.Exec("DELETE FROM authorizations WHERE permanent=0 AND expires>0 AND expires<?", nowUnix)
+}
+
 func (app *App) authenticate(request *http.Request) (string, error) {
 	// 黑名单必须作用于所有请求，而不只是登录入口，否则旧会话仍可继续访问。
 	if app.ipBlocked(app.clientIP(request)) {
