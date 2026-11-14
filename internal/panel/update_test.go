@@ -69,9 +69,9 @@ func TestSignedUpdateRejectsTampering(test *testing.T) {
 	}
 }
 
-func TestUnsignedUpdateUsesSHA256(test *testing.T) {
+func TestUnsignedUpdateRequiresExplicitOptIn(test *testing.T) {
 	panel := setupPanel(test)
-	// 未嵌入公钥：只校验清单与程序的 SHA-256，不请求 manifest.sig。
+	// 未嵌入公钥：默认拒绝更新，必须显式开启 allowUnsignedUpdates。
 	panel.app.updateKey = ""
 	if err := panel.app.store.setSetting("githubRepo", "example/cabbage"); err != nil {
 		test.Fatal(err)
@@ -100,8 +100,14 @@ func TestUnsignedUpdateUsesSHA256(test *testing.T) {
 		}
 		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(data)), Request: request}, nil
 	})
+	if err := panel.app.stageUpdate(context.Background(), io.Discard); err == nil || !strings.Contains(err.Error(), "未签名") {
+		test.Fatalf("unsigned update accepted without opt-in: %v", err)
+	}
+	if err := panel.app.store.setSetting("allowUnsignedUpdates", "true"); err != nil {
+		test.Fatal(err)
+	}
 	if err := panel.app.stageUpdate(context.Background(), io.Discard); err != nil {
-		test.Fatalf("unsigned update rejected: %v", err)
+		test.Fatalf("unsigned update rejected after opt-in: %v", err)
 	}
 	staged, err := os.ReadFile(filepath.Join(panel.app.root, "updates", "cabbage.next"))
 	if err != nil || !bytes.Equal(staged, binary) {

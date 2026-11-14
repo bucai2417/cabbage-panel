@@ -132,7 +132,7 @@ chmod +x ./cabbage-linux-amd64
 
 ## 签名更新与交付
 
-本地 ZIP 可手工部署。在线更新还要求正式程序内嵌 CABBAGE_UPDATE_PUBLIC_KEY，Release 提供由匹配私钥签名的 manifest.json、manifest.sig 及对应平台程序；仅生成 ZIP 不满足在线更新要求。当前本地 v1.0.0 程序未注入正式发布公钥。
+本地 ZIP 可手工部署。在线更新要求程序内嵌发布公钥：`scripts/build.ps1` / `scripts/build.sh` 在未设置 `CABBAGE_UPDATE_PUBLIC_KEY` 时会读取根目录的 `update-public-key.txt`（内容是 Base64 公钥，可公开，不是秘密）。Release 需提供由匹配私钥签名的 manifest.json、manifest.sig 及对应平台程序；只生成 ZIP 不满足在线更新要求。
 
 正式签名身份由项目所有者保管，操作步骤见 [RELEASE.md](RELEASE.md)。当前未授权对外发布，不要推送 tag 来触发发布工作流。
 

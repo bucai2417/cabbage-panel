@@ -58,9 +58,9 @@ Go 后端、Vue 3 前端、SQLite 数据库，前端静态资源嵌入单个程�
 - 依赖：Node.js npm、Python 独立 venv、Linux apt/apk；后台安装、卸载、重装和日志；可配置 npm / pip / apt / apk 镜像源；任务因缺少模块失败时自动识别并安装依赖。
 - 运行时安装：设置页检测 Python / Node.js / Git，缺失时一键下载便携运行时（SHA-256 校验、原子替换、失败回滚），下载源可自定义镜像；首屏与启动日志提示缺失项。
 - 监控：真实 CPU、内存、磁盘、面板堆内存、执行统计和最近运行任务。
-- 账户与应用：首次设置密钥、bcrypt、HttpOnly Cookie、记住账号密码、应用权限与应用有效期、可在列表中直接查看的 Client Secret、可设置有效期或永久并持久登记的 Authorization（与 Client ID 用途分离）、与青龙 `login-log` 形状一致的登录日志（成功/失败、IP、IP 归属地、设备，最多 100 条）、IP 黑名单；MCP 配置只使用 Authorization。
+- 账户与应用：首次设置密钥（只写入 data/setup.key，不打印到日志）、bcrypt、HttpOnly Cookie、保持登录 30 天（浏览器只记住用户名）、应用权限与应用有效期、Client Secret 只显示一次且数据库仅存散列、可设置有效期或永久并持久登记的 Authorization（与 Client ID 用途分离）、与青龙 `login-log` 形状一致的登录日志（成功/失败、IP、IP 归属地、设备，最多 100 条）、按 IP 与账号双维度限流、IP 黑名单；MCP 配置只使用 Authorization。
 - 通知：企业微信、钉钉、飞书、Bark、Telegram、PushPlus、Server酱 SCT、通用 Webhook；支持多渠道并发、签名、逐渠道测试、失败/超时通知，以及 Python/JS/Shell 通知助手；通知发送日志可在面板查看。
-- 备份：ZIP 导出 / 导入，恢复前自动备份，数据库事务和文件目录回滚；拒绝路径穿越与符号链接。
+- 备份：ZIP 导出 / 导入，恢复前自动备份，数据库事务和文件目录回滚；支持每日定时自动备份到独立目录并保留最近 14 份；拒绝路径穿越与符号链接。
 - MCP：`POST /mcp`，无状态 Streamable HTTP，18 个工具，复用应用和资源权限。
 - 接口文档：内置交互式文档页，按开放 / 内置 API 分组，可直接填参数、发请求、查看响应并复制 cURL。
 - 日志页：登录日志、通知日志、系统日志三类，均可在面板查看和清理。
@@ -87,9 +87,9 @@ chmod +x cabbage
 ./cabbage --data ./data --addr :5700
 ```
 
-访问 <http://localhost:5700>。首次启动生成 `data/setup.key` 并在控制台显示设置密钥，输入密钥创建管理员。用户名 2–64 字节，密码 6–72 字节，无默认账号密码；初始化后删除设置密钥文件。
+访问 <http://localhost:5700>。首次启动生成 `data/setup.key`，打开该文件取得设置密钥后创建管理员；密钥不会打印到日志。用户名 2–64 字节，密码 6–72 字节，无默认账号密码；初始化后删除设置密钥文件。
 
-`--version` 输出版本。`--addr 127.0.0.1:5700` 限制本机访问。公网部署使用 HTTPS 反向代理，保留原始 Host，API 和 `/mcp` 不缓存。
+`--version` 输出版本。`--addr 127.0.0.1:5700` 限制本机访问。公网部署使用 HTTPS 反向代理，保留原始 Host，API 和 `/mcp` 不缓存；并在「系统设置 → 账户安全 → 可信反向代理」填写代理地址或网段，否则登录日志、IP 黑名单和限流只认直连地址。
 
 ### 运行时一键安装
 
@@ -158,7 +158,10 @@ HTTP 请求立即返回 `runId`，后台队列执行，结果从日志查询。�
 设置 → 开放应用 / MCP，创建应用并选择 `mcp` 和实际资源权限。密钥仅显示一次。调用以下接口获取有效期 2 小时的 token：
 
 ```
-GET /open/auth/token?client_id=CLIENT_ID&client_secret=CLIENT_SECRET
+POST /open/auth/token
+Content-Type: application/json
+
+{"client_id":"CLIENT_ID","client_secret":"CLIENT_SECRET"}
 ```
 
 随后带 `Authorization: Bearer ACCESS_TOKEN` 访问 `/open` 下的资源。
@@ -182,6 +185,8 @@ MCP 配置：
 ## 备份与恢复
 
 设置 → 备份恢复，创建 ZIP 并妥善保存。导入覆盖账号、任务、变量、应用、脚本和配置，撤销所有会话，随后使用备份内账号登录。导入前自动创建安全备份。
+
+可在同一页面开启每日自动备份并设置时间（服务器本地时间）。自动备份写入 `data/backups/auto` 独立目录，文件名以 `auto-` 开头，仅保留最近 14 份；到点时如有任务或请求正在执行，本次会跳过并写入系统日志，次日继续。
 
 备份与恢复时须清空运行和排队任务。导入最大 256MB，解压总计最大 512MB，单文件最大 32MB；脚本编辑和日志另有较小限制。备份未加密且包含敏感配置。
 

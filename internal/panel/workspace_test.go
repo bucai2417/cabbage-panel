@@ -302,8 +302,8 @@ func TestAuditIPRemoteAndAppAuthorization(test *testing.T) {
 	listed := panel.data(test, "GET", "/api/apps", nil).([]any)
 	for _, entry := range listed {
 		item := entry.(map[string]any)
-		if integer(item["id"]) == integer(app["id"]) && text(item["client_secret"]) != text(app["client_secret"]) {
-			test.Fatal("app secret is not stored for later viewing")
+		if integer(item["id"]) == integer(app["id"]) && (text(item["client_secret"]) != "" || text(item["secret_hash"]) != "") {
+			test.Fatal("app secret must not be stored or listed in plaintext")
 		}
 	}
 	created := panel.data(test, "POST", fmt.Sprintf("/api/apps/%d/token", integer(app["id"])), Object{"expiresIn": 3600}).(map[string]any)
@@ -315,8 +315,8 @@ func TestAuditIPRemoteAndAppAuthorization(test *testing.T) {
 	if status != 200 {
 		test.Fatalf("app authorization could not access crons: %d", status)
 	}
-	query := "?client_id=" + url.QueryEscape(text(app["client_id"])) + "&client_secret=" + url.QueryEscape(text(app["client_secret"])) + "&expiresIn=1800"
-	status, response := panel.call(test, "GET", "/open/auth/token"+query, nil, "")
+	query := "/open/auth/token"
+	status, response := panel.call(test, "POST", query, Object{"client_id": text(app["client_id"]), "client_secret": text(app["client_secret"]), "expiresIn": 1800}, "")
 	if status != 200 || integer(response["data"].(map[string]any)["expiresIn"]) != 1800 {
 		test.Fatalf("custom token ttl: %d %v", status, response)
 	}
@@ -340,7 +340,11 @@ func TestAuditIPRemoteAndAppAuthorization(test *testing.T) {
 	var revokeID int64
 	for _, entry := range tokens {
 		item := entry.(map[string]any)
-		if text(item["token"]) == token {
+		if text(item["token"]) != "" || text(item["secret_hash"]) != "" {
+			test.Fatal("authorization listing must not expose the token")
+		}
+		// 限时令牌 expires 非 0；永久令牌 expires 为 0。
+		if integer(item["expires"]) != 0 && integer(item["expires"]) > time.Now().Unix() {
 			revokeID = integer(item["id"])
 		}
 	}
@@ -352,8 +356,8 @@ func TestAuditIPRemoteAndAppAuthorization(test *testing.T) {
 	if status != 401 {
 		test.Fatalf("revoked authorization remained valid: %d", status)
 	}
-	permanentQuery := "?client_id=" + url.QueryEscape(text(app["client_id"])) + "&client_secret=" + url.QueryEscape(text(app["client_secret"])) + "&permanent=1"
-	status, response = panel.call(test, "GET", "/open/auth/token"+permanentQuery, nil, "")
+	permanentQuery := Object{"client_id": text(app["client_id"]), "client_secret": text(app["client_secret"]), "permanent": true}
+	status, response = panel.call(test, "POST", "/open/auth/token", permanentQuery, "")
 	if status != 200 || !boolean(response["data"].(map[string]any)["permanent"]) {
 		test.Fatalf("credential permanent token: %d %v", status, response)
 	}
@@ -362,8 +366,8 @@ func TestAuditIPRemoteAndAppAuthorization(test *testing.T) {
 	if status != 403 {
 		test.Fatalf("expired app issued authorization: %d", status)
 	}
-	expiredQuery := "?client_id=" + url.QueryEscape(text(expiredApp["client_id"])) + "&client_secret=" + url.QueryEscape(text(expiredApp["client_secret"]))
-	status, _ = panel.call(test, "GET", "/open/auth/token"+expiredQuery, nil, "")
+	expiredQuery := Object{"client_id": text(expiredApp["client_id"]), "client_secret": text(expiredApp["client_secret"])}
+	status, _ = panel.call(test, "POST", "/open/auth/token", expiredQuery, "")
 	if status != 403 {
 		test.Fatalf("expired app exchanged credentials: %d", status)
 	}

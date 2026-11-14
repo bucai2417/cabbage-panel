@@ -74,14 +74,9 @@ export const apiGroups = [
         response: { code: 200, data: ['203.0.113.5'] },
       },
       {
-        id: 'open-token', method: 'GET', path: '/open/auth/token', absolute: true, noAuth: true, tabs: openOnly,
-        summary: '换取开放接口令牌', description: '用应用的 client_id / client_secret 换取 Bearer token。可选 expiresIn（60–2592000 秒，默认 7200）或 permanent=1。应用过期后不能再换取。此接口属于开放 API，内置 API 没有对应路径。',
-        params: [
-          { name: 'client_id', in: 'query', required: true, type: 'string', description: '应用 Client ID', example: 'app_1a2b3c4d5e6f' },
-          { name: 'client_secret', in: 'query', required: true, type: 'string', description: '应用 Client Secret', example: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' },
-          { name: 'expiresIn', in: 'query', type: 'number', description: '有效期秒数 60–2592000，默认 7200', example: '7200' },
-          { name: 'permanent', in: 'query', type: 'string', description: '传 1 或 true 表示永久有效', example: '1' },
-        ],
+        id: 'open-token', method: 'POST', path: '/open/auth/token', absolute: true, noAuth: true, tabs: openOnly,
+        summary: '换取开放接口令牌', description: '用应用的 client_id / client_secret 换取 Bearer token。可选 expiresIn（60–2592000 秒，默认 7200）或 permanent: true。应用过期后不能再换取。凭证只接受 POST 请求体，避免出现在 URL 与访问日志中。此接口属于开放 API，内置 API 没有对应路径。',
+        body: { client_id: 'app_1a2b3c4d5e6f', client_secret: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6', expiresIn: 7200, permanent: false },
         response: { code: 200, data: { token: '…', token_type: 'Bearer', expiration: 1790000000, expiresIn: 7200, permanent: false } },
       },
     ],
@@ -696,7 +691,7 @@ export const apiGroups = [
       },
       {
         id: 'system-settings-put', method: 'PUT', path: '/system/settings', tabs: apiOnly,
-        summary: '保存系统设置', description: '支持部分更新：concurrency（1–32）/ timeout（1–604800 秒）/ retentionDays（1–3650）/ githubRepo / webhookURL / notifyFailures / npmMirror / pythonMirror / linuxMirror / pythonPath / pythonVersion。镜像为 HTTP(S) URL，留空使用默认源；pythonPath 需为存在的文件，pythonVersion 形如 3.11，两者留空自动检测。未知键会返回 400。',
+        summary: '保存系统设置', description: '支持部分更新：concurrency（1–32）/ timeout（1–604800 秒）/ retentionDays（1–3650）/ githubRepo / webhookURL / notifyFailures / npmMirror / pythonMirror / linuxMirror / pythonPath / pythonVersion / autoInstallDeps / autoBackupEnabled / autoBackupTime（HH:MM）/ allowUnsignedUpdates / ipLocationEnabled / ipLocationURL / trustedProxies / outboundAllowlist。镜像与归属地接口为 HTTP(S) URL，留空使用默认源；pythonPath 需为存在的文件，pythonVersion 形如 3.11；可信代理与黑名单会拒绝过宽网段和会封禁当前来源的条目。未知键会返回 400。',
         body: { concurrency: '8', timeout: '3600', retentionDays: '30', npmMirror: 'https://registry.npmmirror.com', pythonMirror: 'https://pypi.tuna.tsinghua.edu.cn/simple', linuxMirror: 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu/', pythonPath: '', pythonVersion: '3.11' },
         response: { code: 200, data: null },
       },
@@ -735,11 +730,11 @@ export const apiGroups = [
       {
         id: 'system-update-check', method: 'GET', path: '/system/update', tabs: apiOnly,
         summary: '检查更新', description: '查询 GitHub 最新稳定 Release，返回当前版本、最新版本、是否有更新与发行说明。',
-        response: { code: 200, data: { current: '1.0.0', latest: '1.0.0', available: false, body: '', url: '', signedUpdates: false, staged: '' } },
+        response: { code: 200, data: { current: '1.0.0', latest: '1.0.0', available: false, body: '', url: '', signedUpdates: false, allowUnsignedUpdates: false, staged: '' } },
       },
       {
         id: 'system-update-download', method: 'POST', path: '/system/update/download', tabs: apiOnly,
-        summary: '下载并验证更新', description: '后台下载，验证 Ed25519 签名与 SHA-256，返回 {id,runId,status}。未嵌入发布公钥时返回 409。',
+        summary: '下载并验证更新', description: '后台下载并验证 Ed25519 签名与 SHA-256；未嵌入发布公钥且未显式开启允许未签名更新时，进度接口会返回失败原因。',
         response: { code: 200, data: { id: 1, runId: 12, status: 'queued' } },
       },
       {
@@ -753,16 +748,16 @@ export const apiGroups = [
     id: 'apps',
     label: '开放应用',
     icon: 'Plug',
-    intro: '仅管理员。scopes 取值 crons、envs、scripts、logs、configs、subscriptions、dependencies、mcp。Client Secret 可在列表中直接查看。',
+    intro: '仅管理员。scopes 取值 crons、envs、scripts、logs、configs、subscriptions、dependencies、mcp。Client Secret 只在创建或重置时返回一次，数据库仅保存散列。',
     endpoints: [
       {
         id: 'apps-list', method: 'GET', path: '/apps', tabs: apiOnly,
-        summary: '应用列表', description: '返回应用，包括可用于显示的 client_secret。',
-        response: { code: 200, data: [{ id: 1, name: 'MCP 客户端', client_id: 'Abc123…', client_secret: '…', scopes: ['crons', 'logs', 'mcp'], expiresAt: '' }] },
+        summary: '应用列表', description: '返回应用元数据；出于安全考虑不再返回 client_secret。',
+        response: { code: 200, data: [{ id: 1, name: 'MCP 客户端', client_id: 'Abc123…', scopes: ['crons', 'logs', 'mcp'], expiresAt: '' }] },
       },
       {
         id: 'apps-create', method: 'POST', path: '/apps', tabs: apiOnly,
-        summary: '创建应用', description: '返回 client_id 与 client_secret；expiresAt 为空表示永久。',
+        summary: '创建应用', description: '返回 client_id 与 client_secret；secret 只显示这一次。expiresAt 为空表示永久。',
         body: { name: 'MCP 客户端', scopes: ['crons', 'logs', 'mcp'], expiresAt: '' },
         response: { code: 200, data: { id: 1, name: 'MCP 客户端', client_id: 'Abc123…', client_secret: 'Xyz789…' } },
       },
@@ -780,7 +775,7 @@ export const apiGroups = [
       },
       {
         id: 'apps-reset-secret', method: 'PUT', path: '/apps/:id/reset-secret', tabs: apiOnly,
-        summary: '重置 Client Secret', description: '撤销已有 token，返回新 secret 并保存为可查看密钥。',
+        summary: '重置 Client Secret', description: '撤销已有 token，返回新 secret（只显示这一次），数据库仅保存散列。',
         params: [{ name: 'id', in: 'path', required: true, type: 'number', description: '应用 ID', example: '1' }],
         response: { code: 200, data: { id: 1, client_id: 'Abc123…', client_secret: 'NewSecret…' } },
       },
@@ -793,9 +788,9 @@ export const apiGroups = [
       },
       {
         id: 'apps-tokens', method: 'GET', path: '/apps/:id/tokens', tabs: apiOnly,
-        summary: 'Authorization 列表', description: '管理员读取该应用的全部令牌登记，刷新页面后可恢复显示。',
+        summary: 'Authorization 列表', description: '管理员读取令牌登记元数据；数据库只保存散列，列表不返回令牌本身。',
         params: [{ name: 'id', in: 'path', required: true, type: 'number', description: '应用 ID', example: '1' }],
-        response: { code: 200, data: [{ id: 9, appId: 1, token: '…', name: 'MCP 客户端', created: '2026-10-04T08:00:00Z', expires: 1790000000, permanent: false, active: true }] },
+        response: { code: 200, data: [{ id: 9, appId: 1, name: 'MCP 客户端', created: '2026-10-04T08:00:00Z', expires: 1790000000, permanent: false, active: true }] },
       },
       {
         id: 'apps-token-delete', method: 'DELETE', path: '/apps/:id/tokens/:tokenId', tabs: apiOnly,
@@ -816,8 +811,8 @@ export const apiGroups = [
     endpoints: [
       {
         id: 'backups-list', method: 'GET', path: '/backups', tabs: apiOnly,
-        summary: '本地备份列表', description: '返回备份文件名、大小和创建时间。',
-        response: { code: 200, data: [{ name: 'cabbage-20261004.zip', size: 1048576, created: '2026-10-04T08:00:00Z' }] },
+        summary: '本地备份列表', description: '返回手动备份与 data/backups/auto 下的自动备份，包含文件名、大小、创建时间和 auto 标记。',
+        response: { code: 200, data: [{ name: 'cabbage-20261004.zip', size: 1048576, created: '2026-10-04T08:00:00Z', auto: false }, { name: 'auto-20261004-030000-abcd1234.zip', size: 1048576, created: '2026-10-04T03:00:00Z', auto: true }] },
       },
       {
         id: 'backups-export', method: 'POST', path: '/backups/export', tabs: apiOnly,
@@ -826,13 +821,13 @@ export const apiGroups = [
       },
       {
         id: 'backups-download', method: 'GET', path: '/backups/:name.zip', tabs: apiOnly,
-        summary: '下载备份', description: '以附件形式下载 ZIP。',
-        params: [{ name: 'name', in: 'path', required: true, type: 'string', description: '备份文件名（不含 .zip）', example: 'cabbage-20261004' }],
+        summary: '下载备份', description: '以附件形式下载 ZIP。自动备份需附加 ?auto=1。',
+        params: [{ name: 'name', in: 'path', required: true, type: 'string', description: '备份文件名（含 .zip）', example: 'cabbage-20261004.zip' }, { name: 'auto', in: 'query', required: false, type: 'string', description: '自动备份传 1', example: '1' }],
       },
       {
         id: 'backups-delete', method: 'DELETE', path: '/backups/:name.zip', tabs: apiOnly,
-        summary: '删除备份', description: '从磁盘永久删除。',
-        params: [{ name: 'name', in: 'path', required: true, type: 'string', description: '备份文件名（不含 .zip）', example: 'cabbage-20261004' }],
+        summary: '删除备份', description: '从磁盘永久删除。自动备份需附加 ?auto=1。',
+        params: [{ name: 'name', in: 'path', required: true, type: 'string', description: '备份文件名（含 .zip）', example: 'cabbage-20261004.zip' }, { name: 'auto', in: 'query', required: false, type: 'string', description: '自动备份传 1', example: '1' }],
         response: { code: 200, data: null },
       },
       {

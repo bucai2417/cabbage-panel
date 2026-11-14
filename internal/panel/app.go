@@ -44,6 +44,10 @@ type App struct {
 	updateState                                UpdateProgress
 	runtimeMu                                  sync.Mutex
 	runtimeState                               RuntimeProgress
+	autoBackupMu                               sync.Mutex
+	autoBackupLast                             string
+	autoBackupStop                             chan struct{}
+	autoBackupDone                             chan struct{}
 	shutdown                                   chan struct{}
 	shutdownOnce                               sync.Once
 }
@@ -57,7 +61,8 @@ func New(root, version, commit, updateKey string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &App{store: store, root: absolute, version: version, commit: commit, updateKey: updateKey, attempts: map[string][]time.Time{}, client: &http.Client{Timeout: 45 * time.Second}, started: time.Now(), shutdown: make(chan struct{})}
+	app := &App{store: store, root: absolute, version: version, commit: commit, updateKey: updateKey, attempts: map[string][]time.Time{}, started: time.Now(), shutdown: make(chan struct{})}
+	app.client = newOutboundClient(app.outboundAllowed, 45*time.Second)
 	app.helperKey = randomToken()
 	for _, dir := range []string{"scripts", "logs", "config", "backups", "repos", "packages", "bin", "updates", "debug"} {
 		if err := os.MkdirAll(filepath.Join(absolute, dir), 0700); err != nil {
@@ -81,7 +86,8 @@ func New(root, version, commit, updateKey string) (*App, error) {
 				return nil, err
 			}
 		}
-		log.Printf("首次设置密钥: %s (保存在 %s)", app.setupKey, keyPath)
+		// 不把首次设置密钥写入日志，避免日志被读取后直接接管未初始化实例。
+		log.Printf("首次设置密钥已写入 %s，请打开该文件查看", keyPath)
 	}
 	_, _ = store.db.Exec("UPDATE runs SET status='interrupted',finished=? WHERE status IN ('running','queued')", now())
 	_, _ = store.db.Exec("DELETE FROM sessions WHERE expires>0 AND expires<?", time.Now().Unix())
@@ -98,10 +104,11 @@ func New(root, version, commit, updateKey string) (*App, error) {
 	// 清扫上次重建 Python 环境时遗留的 venv.bak-* 目录。
 	app.cleanupPythonBackups()
 	app.engine.start()
+	app.startAutoBackup()
 	return app, nil
 }
 
-func (app *App) Close() { app.engine.close(); app.store.close() }
+func (app *App) Close() { app.stopAutoBackup(); app.engine.close(); app.store.close() }
 
 // RequestShutdown 请求优雅停止 HTTP 服务；由更新流程在替换程序后调用。
 func (app *App) RequestShutdown() {
@@ -184,29 +191,6 @@ func hash(value string) string {
 	return hex.EncodeToString(result[:])
 }
 
-func clientIP(request *http.Request) string {
-	host, _, err := net.SplitHostPort(request.RemoteAddr)
-	if err != nil {
-		host = request.RemoteAddr
-	}
-	host = strings.TrimSpace(strings.Trim(host, "[]"))
-	if host == "" {
-		return ""
-	}
-	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
-		if forwarded := request.Header.Get("X-Forwarded-For"); forwarded != "" {
-			first := strings.TrimSpace(strings.Split(forwarded, ",")[0])
-			if net.ParseIP(first) != nil {
-				return first
-			}
-		}
-		if realIP := strings.TrimSpace(request.Header.Get("X-Real-IP")); net.ParseIP(realIP) != nil {
-			return realIP
-		}
-	}
-	return host
-}
-
 // loginPlatform 按青龙约定把登录设备归为 mobile 或 desktop。
 func loginPlatform(request *http.Request) string {
 	agent := strings.ToLower(request.Header.Get("User-Agent"))
@@ -282,6 +266,9 @@ func (app *App) Handler() http.Handler {
 		writer.Header().Set("X-Frame-Options", "DENY")
 		writer.Header().Set("Referrer-Policy", "no-referrer")
 		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		if app.isHTTPS(request) {
+			writer.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		path := strings.TrimRight(request.URL.Path, "/")
 		if path == "" {
 			path = "/"
@@ -379,27 +366,26 @@ func (app *App) Handler() http.Handler {
 }
 
 func (app *App) rateAllowed(request *http.Request) bool {
-	host, _, _ := net.SplitHostPort(request.RemoteAddr)
-	app.loginMu.Lock()
-	defer app.loginMu.Unlock()
-	cutoff := time.Now().Add(-15 * time.Minute)
-	for key, times := range app.attempts {
-		if len(times) == 0 || times[len(times)-1].Before(cutoff) {
-			delete(app.attempts, key)
-		}
+	return app.limitHit("ip:"+app.clientIP(request), 30)
+}
+
+// loginAttemptKey 以账号名散列作为限流键，避免在内存中保留原始用户名。
+func loginAttemptKey(username string) string {
+	return "account:" + hash(strings.ToLower(strings.TrimSpace(username)))
+}
+
+// loginFailureDelay 对同一账号的连续失败返回递增延迟，但不拒绝请求。
+// 这样第三方无法通过反复失败把管理员锁在门外，密码正确时始终能登录。
+func loginFailureDelay(failures int) time.Duration {
+	const threshold = 10
+	if failures < threshold {
+		return 0
 	}
-	times := app.attempts[host]
-	valid := []time.Time{}
-	for _, stamp := range times {
-		if stamp.After(cutoff) {
-			valid = append(valid, stamp)
-		}
+	step := failures - threshold + 1
+	if step >= 5 {
+		return 2 * time.Second
 	}
-	if len(valid) >= 30 || len(app.attempts) > 10000 {
-		return false
-	}
-	app.attempts[host] = append(valid, time.Now())
-	return true
+	return time.Duration(step*step) * 100 * time.Millisecond
 }
 
 func (app *App) public(writer http.ResponseWriter, request *http.Request, path string) bool {
@@ -424,7 +410,7 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 			return true
 		}
 		if subtle.ConstantTimeCompare([]byte(text(body["setupToken"])), []byte(app.setupKey)) != 1 {
-			fail(writer, 403, "首次设置密钥错误，请查看服务启动日志或 data/setup.key")
+			fail(writer, 403, "首次设置密钥错误，请打开 data/setup.key 查看")
 			return true
 		}
 		if err := app.changeUser(body); err != nil {
@@ -436,12 +422,14 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 		return true
 	}
 	if path == "/api/user/login" && request.Method == "POST" {
-		if !app.rateAllowed(request) {
+		ip := app.clientIP(request)
+		local := app.directLoopback(request)
+		if !local && !app.limitHit("ip:"+ip, 30) {
 			fail(writer, 429, "尝试过于频繁，请稍后再试")
 			return true
 		}
 		// 命中 IP 黑名单直接拒绝，并记录一次失败登录。
-		if ip := clientIP(request); app.ipBlocked(ip) {
+		if app.ipBlocked(ip) {
 			app.store.recordLogin(ip, loginPlatform(request), loginAddress(ip), false)
 			fail(writer, 403, "该 IP 已被加入黑名单")
 			return true
@@ -451,29 +439,54 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 			fail(writer, 400, err.Error())
 			return true
 		}
+		username := text(body["username"])
+		// 按账号维度累计失败次数；超过阈值后递增延迟而不是硬锁，避免第三方把管理员锁在门外。
+		accountKey := loginAttemptKey(username)
+		if !local {
+			if delay := loginFailureDelay(app.limitCount(accountKey)); delay > 0 {
+				time.Sleep(delay)
+			}
+		}
 		passwordHash := app.store.setting("password", "")
-		ip := clientIP(request)
 		platform := loginPlatform(request)
-		if passwordHash == "" || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(text(body["password"]))) != nil || text(body["username"]) != app.store.setting("username", "") {
+		if passwordHash == "" || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(text(body["password"]))) != nil || username != app.store.setting("username", "") {
+			app.limitRecord(accountKey)
 			if passwordHash != "" {
 				app.store.recordLogin(ip, platform, loginAddress(ip), false)
 			}
 			fail(writer, 401, "用户名或密码错误")
 			return true
 		}
-		token, err := app.newSession("admin", 24*time.Hour)
+		app.limitReset(accountKey)
+		ttl := 24 * time.Hour
+		if boolean(body["remember"]) {
+			ttl = 30 * 24 * time.Hour
+		}
+		token, err := app.newSession("admin", ttl)
 		if err != nil {
 			fail(writer, 500, err.Error())
 			return true
 		}
-		http.SetCookie(writer, &http.Cookie{Name: "cabbage_session", Value: token, HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteStrictMode, Path: "/", MaxAge: 86400})
+		http.SetCookie(writer, &http.Cookie{Name: "cabbage_session", Value: token, HttpOnly: true, Secure: app.isHTTPS(request), SameSite: http.SameSiteStrictMode, Path: "/", MaxAge: int(ttl / time.Second)})
 		app.store.recordLogin(ip, platform, loginAddress(ip), true)
-		ok(writer, Object{"token": token, "token_type": "Bearer", "expiration": time.Now().Add(24 * time.Hour).Unix(), "username": text(body["username"])})
+		ok(writer, Object{"token": token, "token_type": "Bearer", "expiration": time.Now().Add(ttl).Unix(), "username": username})
 		return true
 	}
-	if path == "/open/auth/token" && request.Method == "GET" {
+	if path == "/open/auth/token" && request.Method == "POST" {
 		if !app.rateAllowed(request) {
 			fail(writer, 429, "尝试过于频繁")
+			return true
+		}
+		var body Object
+		if err := decode(request, &body); err != nil {
+			fail(writer, 400, err.Error())
+			return true
+		}
+		clientID := text(body["client_id"])
+		clientSecret := text(body["client_secret"])
+		clientKey := "client:" + hash(clientID)
+		if app.limitExceeded(clientKey, 10) {
+			fail(writer, 429, "该应用尝试过于频繁，请稍后再试")
 			return true
 		}
 		apps, err := app.store.list("apps")
@@ -482,13 +495,14 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 			return true
 		}
 		for _, item := range apps {
-			if text(item["client_id"]) == request.URL.Query().Get("client_id") && subtle.ConstantTimeCompare([]byte(text(item["secret_hash"])), []byte(hash(request.URL.Query().Get("client_secret")))) == 1 {
+			if text(item["client_id"]) == clientID && subtle.ConstantTimeCompare([]byte(text(item["secret_hash"])), []byte(hash(clientSecret))) == 1 {
 				if appExpired(item) {
 					fail(writer, 403, "应用已过期")
 					return true
 				}
-				ttl := sessionTTL(integer(request.URL.Query().Get("expiresIn")), 2*time.Hour)
-				permanent := request.URL.Query().Get("permanent") == "1" || strings.EqualFold(request.URL.Query().Get("permanent"), "true")
+				app.limitReset(clientKey)
+				ttl := sessionTTL(integer(body["expiresIn"]), 2*time.Hour)
+				permanent := text(body["permanent"]) == "1" || strings.EqualFold(text(body["permanent"]), "true") || body["permanent"] == true
 				if permanent {
 					ttl = 0
 				}
@@ -501,6 +515,7 @@ func (app *App) public(writer http.ResponseWriter, request *http.Request, path s
 				return true
 			}
 		}
+		app.limitRecord(clientKey)
 		fail(writer, 401, "应用凭证错误")
 		return true
 	}
@@ -557,7 +572,7 @@ func (app *App) createAppToken(appID int64, appName string, ttl time.Duration, p
 		flag = 1
 	}
 	created := now()
-	result, err := app.store.db.Exec("INSERT INTO authorizations(app_id,token,name,created,expires,permanent) VALUES(?,?,?,?,?,?)", appID, token, appName, created, expires, flag)
+	result, err := app.store.db.Exec("INSERT INTO authorizations(app_id,token,name,created,expires,permanent) VALUES(?,?,?,?,?,?)", appID, hash(token), appName, created, expires, flag)
 	if err != nil {
 		_, _ = app.store.db.Exec("DELETE FROM sessions WHERE token=?", hash(token))
 		return "", nil, err
@@ -566,6 +581,10 @@ func (app *App) createAppToken(appID int64, appName string, ttl time.Duration, p
 	return token, Object{"id": id, "appId": appID, "name": appName, "token": token, "created": created, "expires": expires, "permanent": permanent, "expiresIn": int64(ttl / time.Second)}, nil
 }
 func (app *App) authenticate(request *http.Request) (string, error) {
+	// 黑名单必须作用于所有请求，而不只是登录入口，否则旧会话仍可继续访问。
+	if app.ipBlocked(app.clientIP(request)) {
+		return "", errors.New("该 IP 已被加入黑名单")
+	}
 	token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 	if token == "" {
 		if cookie, err := request.Cookie("cabbage_session"); err == nil {

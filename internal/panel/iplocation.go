@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -13,9 +14,15 @@ import (
 // ipLocationCache 缓存已解析的 IP 归属地，避免重复请求。
 var ipLocationCache sync.Map
 
+// defaultIPLocationURL 使用 HTTPS 接口，避免把管理员登录 IP 明文发往第三方。
+const defaultIPLocationURL = "https://ipwho.is/{ip}?lang=zh-CN"
+
 // lookupIPLocation 查询公网 IP 归属地。
 // 优先返回缓存；内网/回环直接标注；其余走在线接口，失败返回空串（不缓存失败结果）。
 func (app *App) lookupIPLocation(ip string) string {
+	if app.store.setting("ipLocationEnabled", "true") != "true" {
+		return ""
+	}
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
 		return ""
@@ -36,33 +43,55 @@ func (app *App) lookupIPLocation(ip string) string {
 	return address
 }
 
-// queryIPLocation 调用主接口（ip-api.com，中文 JSON）。
-// 备用接口返回 GBK 编码，为免引入额外依赖，这里只保留主接口；失败时返回空串。
+// queryIPLocation 调用可配置的归属地接口，默认使用 HTTPS 的 ipwho.is。
+// 自定义接口可用 {ip} 占位；兼容 ipwho.is 与 ip-api 的字段命名。
 func (app *App) queryIPLocation(ctx context.Context, ip string) string {
-	return app.queryIPAPI(ctx, ip)
-}
-
-func (app *App) queryIPAPI(ctx context.Context, ip string) string {
-	request, err := http.NewRequestWithContext(ctx, "GET", "http://ip-api.com/json/"+ip+"?lang=zh-CN&fields=status,country,regionName,city,isp", nil)
+	template := strings.TrimSpace(app.store.setting("ipLocationURL", ""))
+	if template == "" {
+		template = defaultIPLocationURL
+	}
+	address := strings.ReplaceAll(template, "{ip}", ip)
+	request, err := http.NewRequestWithContext(ctx, "GET", address, nil)
 	if err != nil {
 		return ""
 	}
+	request.Header.Set("User-Agent", "cabbage-panel/"+app.version)
 	response, err := app.client.Do(request)
 	if err != nil {
 		return ""
 	}
 	defer response.Body.Close()
-	var body struct {
-		Status     string `json:"status"`
-		Country    string `json:"country"`
-		RegionName string `json:"regionName"`
-		City       string `json:"city"`
-		ISP        string `json:"isp"`
-	}
-	if json.NewDecoder(response.Body).Decode(&body) != nil || body.Status != "success" {
+	if response.StatusCode != 200 {
 		return ""
 	}
-	return joinLocation(body.Country, body.RegionName, body.City, body.ISP)
+	var body struct {
+		Status     string `json:"status"`
+		Success    *bool  `json:"success"`
+		Country    string `json:"country"`
+		RegionName string `json:"regionName"`
+		Region     string `json:"region"`
+		City       string `json:"city"`
+		ISP        string `json:"isp"`
+		Connection struct {
+			ISP string `json:"isp"`
+		} `json:"connection"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&body) != nil {
+		return ""
+	}
+	success := body.Status == "success" || (body.Success != nil && *body.Success)
+	if !success && body.Country == "" && body.City == "" {
+		return ""
+	}
+	region := body.RegionName
+	if region == "" {
+		region = body.Region
+	}
+	isp := body.ISP
+	if isp == "" {
+		isp = body.Connection.ISP
+	}
+	return joinLocation(body.Country, region, body.City, isp)
 }
 
 // joinLocation 去重拼接归属地，忽略空值与「XX省XX市」里的重复部分。
@@ -83,6 +112,9 @@ func joinLocation(parts ...string) string {
 // enrichLoginLogs 为缺少归属地的公网 IP 补全地址，并回写数据库缓存。
 // 命中缓存的立即返回；未命中时先返回空，后台异步补全，避免阻塞页面加载。
 func (app *App) enrichLoginLogs(logs []Object) []Object {
+	if app.store.setting("ipLocationEnabled", "true") != "true" {
+		return logs
+	}
 	pending := []string{}
 	for index := range logs {
 		address := text(logs[index]["address"])

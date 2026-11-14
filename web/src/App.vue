@@ -50,40 +50,30 @@ async function openNotice() {
 }
 const login = ref({ username: '', password: '', setupToken: '' })
 const remember = ref(false)
-const rememberKey = 'cabbage-remember-login'
-// 记住的凭据只做 Base64 编码，避免在 localStorage 里以明文直接可见。
-// 这是本地单用户面板的便利功能，不构成安全边界；共用电脑请勿勾选。
-function encodeRemember(value) {
-  try {
-    const bytes = new TextEncoder().encode(JSON.stringify(value))
-    let binary = ''
-    bytes.forEach(byte => { binary += String.fromCharCode(byte) })
-    return btoa(binary)
-  } catch { return '' }
-}
-function decodeRemember(text) {
-  try {
-    const binary = atob(text)
-    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
-    return JSON.parse(new TextDecoder().decode(bytes))
-  } catch { return null }
-}
+const rememberKey = 'cabbage-remember-user'
+const legacyRememberKey = 'cabbage-remember-login'
+// 只在本地记住用户名；密码绝不写入浏览器存储，保持登录依赖服务端 HttpOnly 会话 Cookie。
 function restoreRemember() {
   if (typeof localStorage === 'undefined') return
-  const saved = decodeRemember(localStorage.getItem(rememberKey) || '')
-  if (saved && saved.username) {
-    login.value.username = saved.username
-    login.value.password = saved.password || ''
-    remember.value = true
-  }
+  try {
+    // 旧版本会把用户名和密码一起 Base64 存储，这里迁移为只保留用户名并清除旧数据。
+    const legacy = localStorage.getItem(legacyRememberKey)
+    if (legacy) {
+      let saved = null
+      try { saved = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(legacy), char => char.charCodeAt(0)))) } catch { /* 忽略损坏数据 */ }
+      localStorage.removeItem(legacyRememberKey)
+      if (saved && saved.username) localStorage.setItem(rememberKey, saved.username)
+    }
+    const username = localStorage.getItem(rememberKey) || ''
+    if (username) { login.value.username = username; remember.value = true }
+  } catch { /* 忽略存储失败 */ }
 }
-function persistRemember() {
+function persistRemember(username) {
   if (typeof localStorage === 'undefined') return
-  if (remember.value && login.value.username) {
-    localStorage.setItem(rememberKey, encodeRemember({ username: login.value.username, password: login.value.password }))
-  } else {
-    localStorage.removeItem(rememberKey)
-  }
+  try {
+    if (remember.value && username) localStorage.setItem(rememberKey, username)
+    else localStorage.removeItem(rememberKey)
+  } catch { /* 忽略存储失败 */ }
 }
 const navigation = [
   { id: 'dashboard', label: '仪表盘', icon: 'LayoutDashboard' },
@@ -159,9 +149,11 @@ async function bootstrap() {
 async function submitLogin() {
   busy.value = true; error.value = ''
   try {
+    const keep = initialized.value && remember.value
     if (!initialized.value) { await api('/user/init', 'POST', login.value); initialized.value = true }
-    const result = await api('/user/login', 'POST', login.value); user.value = result.username; loggedIn.value = true
-    persistRemember()
+    const result = await api('/user/login', 'POST', { username: login.value.username, password: login.value.password, remember: keep })
+    user.value = result.username; loggedIn.value = true
+    persistRemember(result.username || login.value.username)
     login.value.password = ''; login.value.setupToken = ''
   } catch (failure) { error.value = failure.message } finally { busy.value = false }
 }
@@ -183,7 +175,7 @@ onUnmounted(() => { if (updateTimer) clearInterval(updateTimer); window.removeEv
   <div v-else-if="!loggedIn" class="login-screen">
     <div class="login-brand"><img src="/logo.png" alt="白菜标志" /><span>大白菜面板</span><small>A LITTLE GREEN. A LOT DONE.</small></div>
     <section class="login-card"><h1>{{ initialized ? '欢迎回来。' : '种下自动化的第一步。' }}</h1><p>{{ initialized ? '登录大白菜面板，让工作轻一点。' : '创建管理员账户，开始您的自动化之旅。' }}</p>
-      <form @submit.prevent="submitLogin"><label v-if="!initialized" class="field"><span>首次设置密钥</span><input v-model="login.setupToken" aria-label="首次设置密钥" required type="password" autocomplete="off" placeholder="查看启动日志或 data/setup.key" /><small>仅首次初始化需要，用于确认您拥有这台服务器。</small></label><label class="field"><span>用户名</span><input v-model="login.username" autocomplete="username" required minlength="2" placeholder="请输入用户名" /></label><label class="field"><span>密码</span><input v-model="login.password" type="password" :autocomplete="initialized ? 'current-password' : 'new-password'" required :minlength="initialized ? 1 : 6" :placeholder="initialized ? '请输入密码' : '至少 6 个字符'" /></label><label v-if="initialized" class="login-remember"><input v-model="remember" type="checkbox" /><span>记住账号密码</span><small>仅保存在本机浏览器；共用电脑请勿勾选。</small></label><p v-if="error" class="inline-error" role="alert">{{ error }}</p><button class="button primary login-button" :disabled="busy"><Icon :name="busy ? 'LoaderCircle' : 'ArrowRight'" :class="{ spin: busy }" />{{ busy ? '请稍候…' : initialized ? '进入工作空间' : '创建并登录' }}</button></form>
+      <form @submit.prevent="submitLogin"><label v-if="!initialized" class="field"><span>首次设置密钥</span><input v-model="login.setupToken" aria-label="首次设置密钥" required type="password" autocomplete="off" placeholder="打开 data/setup.key 查看" /><small>仅首次初始化需要，用于确认您拥有这台服务器。</small></label><label class="field"><span>用户名</span><input v-model="login.username" autocomplete="username" required minlength="2" placeholder="请输入用户名" /></label><label class="field"><span>密码</span><input v-model="login.password" type="password" :autocomplete="initialized ? 'current-password' : 'new-password'" required :minlength="initialized ? 1 : 6" :placeholder="initialized ? '请输入密码' : '至少 6 个字符'" /></label><label v-if="initialized" class="login-remember"><input v-model="remember" type="checkbox" /><span>保持登录 30 天</span><small>密码不会保存在浏览器；共用电脑请勿勾选。</small></label><p v-if="error" class="inline-error" role="alert">{{ error }}</p><button class="button primary login-button" :disabled="busy"><Icon :name="busy ? 'LoaderCircle' : 'ArrowRight'" :class="{ spin: busy }" />{{ busy ? '请稍候…' : initialized ? '进入工作空间' : '创建并登录' }}</button></form>
       <div class="login-note"><Icon name="ShieldCheck" :size="15" />本地数据 · 自主掌控 · 轻量运行</div>
     </section><div class="login-footer">大白菜面板 v{{ version }} · 把时间留给更重要的事</div>
   </div>

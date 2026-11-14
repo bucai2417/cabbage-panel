@@ -279,6 +279,7 @@ func (engine *Engine) enqueueJob(kind string, id int64, name, command string, it
 	engine.queue <- job
 	return Object{"id": id, "runId": runID, "status": "queued"}, nil
 }
+
 // finishCancelled 把排队中就被停止的任务标记为 cancelled 并清理。
 func (engine *Engine) finishCancelled(job *Job) {
 	_, _ = engine.app.store.db.Exec("UPDATE runs SET status='cancelled',finished=? WHERE id=?", now(), job.ID)
@@ -416,8 +417,8 @@ func (engine *Engine) execute(job *Job) {
 		}
 		_, _ = engine.app.store.save("dependencies", Object{"id": job.TaskID, "status": depStatus, "lastStatus": status})
 	}
-	// 任务失败时自动识别缺失依赖并安装，下次运行即可直接使用。
-	if job.Kind == "crons" && status == "failed" {
+	// 任务失败时自动识别缺失依赖并安装；默认关闭，避免第三方脚本借日志写入触发任意安装。
+	if job.Kind == "crons" && status == "failed" && engine.app.store.setting("autoInstallDeps", "false") == "true" {
 		if missing := engine.app.detectMissingDependencies(logName); len(missing) > 0 {
 			if created := engine.app.autoInstallMissing(missing); len(created) > 0 {
 				fmt.Fprintf(writer, "\n已自动添加依赖: %s（安装完成后可重新运行）\n", strings.Join(created, ", "))
@@ -502,6 +503,7 @@ func (app *App) pythonSource(ctx context.Context) string {
 	}
 	return "system"
 }
+
 // shell 返回实际可用的 Shell：CABBAGE_BASH > 便携 Git bash > 系统 Git bash > LookPath。
 func (app *App) shell() string {
 	if value := strings.TrimSpace(os.Getenv("CABBAGE_BASH")); value != "" {
@@ -843,4 +845,3 @@ EOF
     exit $exit_code
     ;;
 esac`
-

@@ -210,7 +210,7 @@ func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tai
 			apiError(writer, err)
 			return
 		}
-		ok(writer, Object{"current": app.version, "latest": strings.TrimPrefix(release.Tag, "v"), "available": newerVersion(release.Tag, app.version), "body": release.Body, "url": release.URL, "signedUpdates": app.updateKey != "", "staged": app.store.setting("stagedVersion", ""), "restartMode": restartMode()})
+		ok(writer, Object{"current": app.version, "latest": strings.TrimPrefix(release.Tag, "v"), "available": newerVersion(release.Tag, app.version), "body": release.Body, "url": release.URL, "signedUpdates": app.updateKey != "", "allowUnsignedUpdates": app.store.setting("allowUnsignedUpdates", "false") == "true", "staged": app.store.setting("stagedVersion", ""), "restartMode": restartMode()})
 		return
 	}
 	if tail == "/progress" && request.Method == "GET" {
@@ -310,9 +310,14 @@ func (app *App) updateAPI(writer http.ResponseWriter, request *http.Request, tai
 }
 
 func (app *App) stageUpdate(ctx context.Context, writer io.Writer) error {
-	// 嵌入发布公钥时强制验签；未嵌入时退化为仅校验 SHA-256（依赖 HTTPS）。
+	// 未嵌入发布公钥时默认拒绝更新，避免 HTTPS 下载的清单被篡改后直接执行任意二进制。
+	// 只有管理员显式开启 allowUnsignedUpdates 才退化为 SHA-256 校验。
 	var key ed25519.PublicKey
-	if app.updateKey != "" {
+	if app.updateKey == "" {
+		if app.store.setting("allowUnsignedUpdates", "false") != "true" {
+			return errors.New("此构建未嵌入发布公钥，已拒绝未签名更新；如确认风险，请在「设置 → 关于」中显式开启允许未签名更新")
+		}
+	} else {
 		decoded, err := base64.StdEncoding.DecodeString(app.updateKey)
 		if err != nil || len(decoded) != ed25519.PublicKeySize {
 			return errors.New("发布公钥无效")

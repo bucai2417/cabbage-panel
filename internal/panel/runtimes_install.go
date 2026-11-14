@@ -354,15 +354,7 @@ func (app *App) downloadToFile(ctx context.Context, address, path string, limit,
 	if resume > 0 {
 		request.Header.Set("Range", "bytes="+strconv.FormatInt(resume, 10)+"-")
 	}
-	client := &http.Client{
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			ResponseHeaderTimeout: 60 * time.Second,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   20 * time.Second,
-			ForceAttemptHTTP2:     true,
-		},
-	}
+	client := &http.Client{Transport: safeOutboundTransport(app.outboundAllowed)}
 	response, err := client.Do(request)
 	if err != nil {
 		return err

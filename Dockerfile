@@ -17,7 +17,8 @@ COPY --from=frontend /source/web/dist ./web/dist
 ARG VERSION=1.0.0
 ARG COMMIT=dev
 ARG CABBAGE_UPDATE_PUBLIC_KEY=""
-RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.updateKey=$CABBAGE_UPDATE_PUBLIC_KEY" -o /cabbage ./cmd/cabbage
+RUN KEY="${CABBAGE_UPDATE_PUBLIC_KEY:-$(tr -d '\r\n' < update-public-key.txt 2>/dev/null)}" && \
+    CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.updateKey=$KEY" -o /cabbage ./cmd/cabbage
 
 # 官方 python 镜像自带 pip 与 venv，Node 从 node 镜像复制进来（同为 bookworm，glibc 一致）。
 FROM node:24-bookworm-slim AS node-runtime

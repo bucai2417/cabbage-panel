@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -44,26 +45,45 @@ func (app *App) ipBlocked(ip string) bool {
 }
 
 // saveIPBlacklist 写回黑名单，去重并保持顺序。
-func (app *App) saveIPBlacklist(entries []string) error {
+// requester 非空时拒绝会封禁当前访问来源的条目，避免管理员把自己锁在门外。
+func (app *App) saveIPBlacklist(entries []string, requester string) error {
 	seen := map[string]bool{}
 	cleaned := []string{}
+	requestIP := net.ParseIP(strings.TrimSpace(requester))
 	for _, entry := range entries {
 		value := strings.TrimSpace(entry)
 		if value == "" || seen[value] {
 			continue
 		}
 		if strings.Contains(value, "/") {
-			if _, _, err := net.ParseCIDR(value); err != nil {
+			_, network, err := net.ParseCIDR(value)
+			if err != nil {
 				return errInvalidIP(value)
+			}
+			if tooBroadCIDR(network) {
+				return fmt.Errorf("黑名单网段过宽: %s（IPv4 至少 /8，IPv6 至少 /16）", value)
 			}
 		} else if net.ParseIP(value) == nil {
 			return errInvalidIP(value)
+		}
+		if requestIP != nil && blacklistMatches(value, requestIP) {
+			return fmt.Errorf("该条目会封禁当前访问来源 %s，已拒绝保存", requestIP.String())
 		}
 		seen[value] = true
 		cleaned = append(cleaned, value)
 	}
 	_, err := app.store.db.Exec("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", ipBlacklistKey, strings.Join(cleaned, ","))
 	return err
+}
+
+// blacklistMatches 判断单条黑名单条目是否命中指定 IP。
+func blacklistMatches(entry string, ip net.IP) bool {
+	if strings.Contains(entry, "/") {
+		_, network, err := net.ParseCIDR(entry)
+		return err == nil && network.Contains(ip)
+	}
+	parsed := net.ParseIP(entry)
+	return parsed != nil && parsed.Equal(ip)
 }
 
 type invalidIPError string
@@ -86,7 +106,7 @@ func (app *App) ipBlacklistAPI(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		entries := append(app.ipBlacklist(), body.IP)
-		if err := app.saveIPBlacklist(entries); err != nil {
+		if err := app.saveIPBlacklist(entries, app.clientIP(request)); err != nil {
 			apiError(writer, err)
 			return
 		}
@@ -106,7 +126,7 @@ func (app *App) ipBlacklistAPI(writer http.ResponseWriter, request *http.Request
 				entries = append(entries, entry)
 			}
 		}
-		if err := app.saveIPBlacklist(entries); err != nil {
+		if err := app.saveIPBlacklist(entries, ""); err != nil {
 			apiError(writer, err)
 			return
 		}

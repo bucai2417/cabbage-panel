@@ -72,6 +72,14 @@ func openStore(root string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := hashLegacyAuthorizations(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := purgeLegacyAppSecrets(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	migrateLoginLogs(db)
 	success = true
 	return &Store{db: db, lock: lock}, nil
@@ -104,6 +112,84 @@ func ensureAuditColumns(db *sql.DB) error {
 			continue
 		}
 		if _, err := db.Exec("ALTER TABLE audit ADD COLUMN " + column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// hashLegacyAuthorizations 把旧版本明文保存的 Authorization 迁移为 SHA-256 散列。
+// sessions 表本来就以散列作为键，因此迁移后撤销令牌仍能精确删除对应会话。
+func hashLegacyAuthorizations(db *sql.DB) error {
+	var marker string
+	if db.QueryRow("SELECT value FROM settings WHERE key='authorizations_hashed'").Scan(&marker) == nil && marker == "1" {
+		return nil
+	}
+	rows, err := db.Query("SELECT id, token FROM authorizations")
+	if err != nil {
+		return err
+	}
+	type entry struct {
+		id    int64
+		token string
+	}
+	items := []entry{}
+	for rows.Next() {
+		var item entry
+		if rows.Scan(&item.id, &item.token) == nil {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, item := range items {
+		if _, err := db.Exec("UPDATE authorizations SET token=? WHERE id=?", hash(item.token), item.id); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec("INSERT INTO settings(key,value) VALUES('authorizations_hashed','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+	return err
+}
+
+// purgeLegacyAppSecrets 删除旧版本应用记录中的明文 client_secret，只保留 secret_hash。
+func purgeLegacyAppSecrets(db *sql.DB) error {
+	rows, err := db.Query("SELECT id, data FROM records WHERE kind='apps'")
+	if err != nil {
+		return err
+	}
+	type entry struct {
+		id   int64
+		data string
+	}
+	items := []entry{}
+	for rows.Next() {
+		var item entry
+		if rows.Scan(&item.id, &item.data) == nil {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, item := range items {
+		var record Object
+		if json.Unmarshal([]byte(item.data), &record) != nil {
+			continue
+		}
+		if _, found := record["client_secret"]; !found {
+			continue
+		}
+		delete(record, "client_secret")
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		if _, err := db.Exec("UPDATE records SET data=? WHERE kind='apps' AND id=?", string(data), item.id); err != nil {
 			return err
 		}
 	}
@@ -235,6 +321,10 @@ func (store *Store) saveLocked(kind string, item Object) (Object, error) {
 		item["timestamp"] = jsTimestamp(time.Now())
 	}
 	item["updatedAt"] = now()
+	// 应用密钥只保存散列；任何路径都不允许把明文 secret 写入记录。
+	if kind == "apps" {
+		delete(item, "client_secret")
+	}
 	data, err := json.Marshal(item)
 	if err != nil {
 		return nil, err

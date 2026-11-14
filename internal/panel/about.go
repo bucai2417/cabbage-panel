@@ -14,14 +14,15 @@ import (
 // aboutInfo 返回关于页需要的运行环境信息。
 func (app *App) aboutInfo() Object {
 	info := Object{
-		"version":       app.version,
-		"commit":        app.commit,
-		"go":            runtime.Version(),
-		"os":            runtime.GOOS,
-		"arch":          runtime.GOARCH,
-		"platform":      runtime.GOOS + "/" + runtime.GOARCH,
-		"restartMode":   restartMode(),
-		"signedUpdates": app.updateKey != "",
+		"version":              app.version,
+		"commit":               app.commit,
+		"go":                   runtime.Version(),
+		"os":                   runtime.GOOS,
+		"arch":                 runtime.GOARCH,
+		"platform":             runtime.GOOS + "/" + runtime.GOARCH,
+		"restartMode":          restartMode(),
+		"signedUpdates":        app.updateKey != "",
+		"allowUnsignedUpdates": app.store.setting("allowUnsignedUpdates", "false") == "true",
 	}
 	if hostInfo, err := host.Info(); err == nil {
 		name := strings.TrimSpace(strings.TrimSpace(hostInfo.Platform) + " " + strings.TrimSpace(hostInfo.PlatformVersion))

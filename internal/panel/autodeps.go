@@ -16,6 +16,24 @@ var (
 	shellMissing = regexp.MustCompile(`(?m)^([A-Za-z0-9_.\-]+): command not found`)
 )
 
+// 包名白名单：只允许普通包名字符，拒绝命令行参数、路径和 URL 形态。
+var (
+	pythonPackageName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+	nodePackageName   = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]{0,63}/)?[a-z0-9][a-z0-9._-]{0,63}$`)
+)
+
+// validDependencyName 判断从日志提取出的包名是否可安全交给包管理器。
+func validDependencyName(name string, kind int) bool {
+	switch kind {
+	case 0:
+		return nodePackageName.MatchString(name) && !strings.Contains(name, "..")
+	case 1:
+		return pythonPackageName.MatchString(name) && !strings.Contains(name, "..")
+	default:
+		return false
+	}
+}
+
 // missingDependency 描述一个从日志中识别出的缺失依赖。
 type missingDependency struct {
 	Name string
@@ -52,7 +70,7 @@ func (app *App) detectMissingDependencies(logName string) []missingDependency {
 				name = name[:index]
 			}
 		}
-		if name == "" || seen[name] {
+		if name == "" || seen[name] || !validDependencyName(name, kind) {
 			return
 		}
 		seen[name] = true
@@ -85,7 +103,7 @@ func (app *App) autoInstallMissing(missing []missingDependency) []string {
 	}
 	created := []string{}
 	for _, dep := range missing {
-		if installed[dep.Name] {
+		if installed[dep.Name] || !validDependencyName(dep.Name, dep.Type) {
 			continue
 		}
 		item := Object{"name": dep.Name, "type": dep.Type, "remark": "任务运行失败后自动添加", "status": 1, "remove": false}

@@ -374,6 +374,7 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 				item = dependencyCompat(item, app.dependencyLog(integer(item["id"])))
 			}
 			delete(item, "secret_hash")
+			delete(item, "client_secret")
 			filtered = append(filtered, item)
 		}
 		sort.SliceStable(filtered, func(left, right int) bool {
@@ -514,17 +515,13 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 					secret = randomToken()
 					item["client_id"] = randomToken()[:24]
 					item["secret_hash"] = hash(secret)
-					item["client_secret"] = secret
 				} else {
 					old, _ := app.store.get(kind, integer(item["id"]))
 					item["client_id"] = old["client_id"]
 					item["secret_hash"] = old["secret_hash"]
-					if value, exists := old["client_secret"]; exists {
-						item["client_secret"] = value
-					} else {
-						delete(item, "client_secret")
-					}
 				}
+				// 明文 secret 只在创建/重置的响应里返回一次，不进入数据库。
+				delete(item, "client_secret")
 			}
 			if kind == "dependencies" {
 				item["status"] = 1
@@ -780,6 +777,7 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 				item = dependencyCompat(item, app.dependencyLog(id))
 			}
 			delete(item, "secret_hash")
+			delete(item, "client_secret")
 			ok(writer, item)
 			return
 		}
@@ -808,7 +806,8 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 				}
 			case "tokens":
 				if kind == "apps" && method == "GET" {
-					rows, err := app.store.db.Query("SELECT id,token,name,created,expires,permanent FROM authorizations WHERE app_id=? ORDER BY id DESC", id)
+					// 数据库只保存令牌散列，列表仅返回可管理元数据，不返回令牌本身。
+					rows, err := app.store.db.Query("SELECT id,name,created,expires,permanent FROM authorizations WHERE app_id=? ORDER BY id DESC", id)
 					if err != nil {
 						apiError(writer, err)
 						return
@@ -818,9 +817,9 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 					nowUnix := time.Now().Unix()
 					for rows.Next() {
 						var tokenID, expires, permanent int64
-						var token, name, created string
-						if rows.Scan(&tokenID, &token, &name, &created, &expires, &permanent) == nil {
-							result = append(result, Object{"id": tokenID, "appId": id, "token": token, "name": name, "created": created, "expires": expires, "permanent": permanent == 1, "active": permanent == 1 || expires > nowUnix})
+						var name, created string
+						if rows.Scan(&tokenID, &name, &created, &expires, &permanent) == nil {
+							result = append(result, Object{"id": tokenID, "appId": id, "name": name, "created": created, "expires": expires, "permanent": permanent == 1, "active": permanent == 1 || expires > nowUnix})
 						}
 					}
 					ok(writer, result)
@@ -903,7 +902,7 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 				if kind == "apps" && method == "PUT" {
 					secret := randomToken()
 					item["secret_hash"] = hash(secret)
-					item["client_secret"] = secret
+					delete(item, "client_secret")
 					saved, err := app.store.save(kind, item)
 					if err != nil {
 						apiError(writer, err)
@@ -920,12 +919,13 @@ func (app *App) recordsAPI(writer http.ResponseWriter, request *http.Request, ki
 		}
 		if len(segments) == 3 && kind == "apps" && segments[1] == "tokens" && method == "DELETE" {
 			tokenID := integer(segments[2])
+			// 登记表中保存的已经是散列，可直接删除对应会话。
 			var token string
 			if err := app.store.db.QueryRow("SELECT token FROM authorizations WHERE id=? AND app_id=?", tokenID, id).Scan(&token); err != nil {
 				apiError(writer, err)
 				return
 			}
-			if _, err := app.store.db.Exec("DELETE FROM sessions WHERE token=?", hash(token)); err != nil {
+			if _, err := app.store.db.Exec("DELETE FROM sessions WHERE token=?", token); err != nil {
 				apiError(writer, err)
 				return
 			}
@@ -1035,7 +1035,9 @@ func (app *App) viewsAPI(writer http.ResponseWriter, request *http.Request, tail
 			apiError(writer, err)
 			return
 		}
-		sort.SliceStable(items, func(left, right int) bool { return integer(items[left]["position"]) < integer(items[right]["position"]) })
+		sort.SliceStable(items, func(left, right int) bool {
+			return integer(items[left]["position"]) < integer(items[right]["position"])
+		})
 		from, to := int(body.FromIndex), int(body.ToIndex)
 		if from < 0 || from >= len(items) || to < 0 || to >= len(items) {
 			fail(writer, 400, "排序位置无效")

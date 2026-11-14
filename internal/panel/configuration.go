@@ -10,9 +10,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
-var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true", "npmMirror": "", "pythonMirror": "", "linuxMirror": "", "pythonPath": "", "pythonVersion": "", "runtimePythonMirror": "", "runtimeNodeMirror": "", "runtimeGitMirror": "", "runtimeMambaMirror": "", "runtimeMambaChannel": ""}
+var settingDefaults = map[string]string{"concurrency": "4", "timeout": "3600", "retentionDays": "30", "githubRepo": "bucai2417/cabbage-panel", "webhookURL": "", "notifyFailures": "true", "npmMirror": "", "pythonMirror": "", "linuxMirror": "", "pythonPath": "", "pythonVersion": "", "runtimePythonMirror": "", "runtimeNodeMirror": "", "runtimeGitMirror": "", "runtimeMambaMirror": "", "runtimeMambaChannel": "", "trustedProxies": "", "outboundAllowlist": "", "autoInstallDeps": "false", "allowUnsignedUpdates": "false", "ipLocationEnabled": "true", "ipLocationURL": "", "autoBackupEnabled": "false", "autoBackupTime": "03:00"}
 
 func (app *App) settings() Object {
 	result := Object{}
@@ -48,9 +49,15 @@ func (app *App) saveSettings(body Object) error {
 			if text(value) != "" && !validHTTP(text(value)) {
 				return errors.New("Webhook 地址无效")
 			}
-		case "notifyFailures":
+		case "notifyFailures", "autoInstallDeps", "allowUnsignedUpdates", "ipLocationEnabled", "autoBackupEnabled":
 			if text(value) != "true" && text(value) != "false" {
-				return errors.New("notifyFailures 只能为 true 或 false")
+				return fmt.Errorf("%s 只能为 true 或 false", key)
+			}
+		case "autoBackupTime":
+			// 每日自动备份时间，形如 03:00。
+			parsed, err := time.Parse("15:04", strings.TrimSpace(text(value)))
+			if err != nil || parsed.Format("15:04") != strings.TrimSpace(text(value)) {
+				return errors.New("自动备份时间格式应为 HH:MM，例如 03:00")
 			}
 		case "npmMirror", "pythonMirror", "linuxMirror", "runtimePythonMirror", "runtimeNodeMirror", "runtimeGitMirror", "runtimeMambaMirror":
 			if address := strings.TrimSpace(text(value)); address != "" && !validHTTP(address) {
@@ -73,6 +80,22 @@ func (app *App) saveSettings(body Object) error {
 			// 形如 3.10、3.12；留空表示不指定。
 			if version := strings.TrimSpace(text(value)); version != "" && !regexp.MustCompile(`^\d+\.\d{1,2}$`).MatchString(version) {
 				return errors.New("Python 版本格式应为 3.10 这样的「主.次」")
+			}
+		case "ipLocationURL":
+			// 归属地接口模板，{ip} 会被替换成目标地址；留空使用内置 HTTPS 接口。
+			address := strings.ReplaceAll(strings.TrimSpace(text(value)), "{ip}", "1.1.1.1")
+			if address != "" && !validHTTP(address) {
+				return errors.New("归属地接口必须是无内嵌凭证的 HTTP(S) URL，可用 {ip} 占位")
+			}
+		case "trustedProxies":
+			// 逗号分隔的 IP 或 CIDR；只有这些地址转发的 X-Forwarded-* 会被信任。
+			if err := validateTrustedProxies(text(value)); err != nil {
+				return err
+			}
+		case "outboundAllowlist":
+			// 逗号分隔的 host 或 host:port；仅用于显式放行的局域网地址。
+			if !validOutboundAllowlist(text(value)) {
+				return errors.New("出站白名单需为逗号分隔的 host 或 host:port")
 			}
 		}
 	}

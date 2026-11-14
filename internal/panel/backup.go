@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -35,20 +36,10 @@ func (app *App) backupAPI(writer http.ResponseWriter, request *http.Request, pat
 	}
 	tail := strings.TrimPrefix(path, "/backups")
 	if tail == "" && request.Method == "GET" {
-		entries, err := os.ReadDir(filepath.Join(app.root, "backups"))
+		items, err := app.listBackups()
 		if err != nil {
 			apiError(writer, err)
 			return
-		}
-		items := []Object{}
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".zip") {
-				info, err := entry.Info()
-				if err != nil {
-					continue
-				}
-				items = append(items, Object{"name": entry.Name(), "size": info.Size(), "created": info.ModTime().Format(time.RFC3339)})
-			}
 		}
 		ok(writer, items)
 		return
@@ -116,7 +107,11 @@ func (app *App) backupAPI(writer http.ResponseWriter, request *http.Request, pat
 		fail(writer, 404, "备份不存在")
 		return
 	}
-	target, err := safePath(filepath.Join(app.root, "backups"), name)
+	directory := filepath.Join(app.root, "backups")
+	if request.URL.Query().Get("auto") == "1" {
+		directory = filepath.Join(directory, "auto")
+	}
+	target, err := safePath(directory, name)
 	if err != nil {
 		apiError(writer, err)
 		return
@@ -138,7 +133,43 @@ func (app *App) backupAPI(writer http.ResponseWriter, request *http.Request, pat
 	fail(writer, 405, "方法不支持")
 }
 
+// listBackups 汇总手动备份与 backups/auto 下的自动备份。
+func (app *App) listBackups() ([]Object, error) {
+	items := []Object{}
+	for _, source := range []struct {
+		directory string
+		auto      bool
+	}{
+		{filepath.Join(app.root, "backups"), false},
+		{filepath.Join(app.root, "backups", "auto"), true},
+	} {
+		entries, err := os.ReadDir(source.directory)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".zip") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			items = append(items, Object{"name": entry.Name(), "size": info.Size(), "created": info.ModTime().Format(time.RFC3339), "auto": source.auto})
+		}
+	}
+	return items, nil
+}
+
 func (app *App) createBackup() (string, error) {
+	return app.createBackupIn(filepath.Join(app.root, "backups"), "")
+}
+
+// createBackupIn 在指定目录创建备份；prefix 用于区分自动备份文件名。
+func (app *App) createBackupIn(directory, prefix string) (string, error) {
 	manifest := Backup{Format: 1, Version: app.version, Created: now(), Records: map[string][]Object{}, Settings: map[string]string{}}
 	for _, kind := range recordKinds {
 		items, err := app.store.list(kind)
@@ -175,8 +206,11 @@ func (app *App) createBackup() (string, error) {
 	}
 	totalBytes := int64(len(manifestData))
 	fileCount := 1
-	name := time.Now().UTC().Format("20060102-150405") + "-" + randomToken()[:8] + ".zip"
-	target := filepath.Join(app.root, "backups", name)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return "", err
+	}
+	name := prefix + time.Now().UTC().Format("20060102-150405") + "-" + randomToken()[:8] + ".zip"
+	target := filepath.Join(directory, name)
 	temporary := target + ".tmp"
 	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -418,4 +452,105 @@ func (app *App) restoreBackup(data []byte) (string, error) {
 		return "", err
 	}
 	return safety, nil
+}
+
+const autoBackupKeep = 14
+
+// startAutoBackup 启动每日自动备份检查；设置修改后无需重启即可生效。
+func (app *App) startAutoBackup() {
+	app.autoBackupStop = make(chan struct{})
+	app.autoBackupDone = make(chan struct{})
+	go func() {
+		defer close(app.autoBackupDone)
+		app.maybeAutoBackup(time.Now())
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-app.autoBackupStop:
+				return
+			case now := <-ticker.C:
+				app.maybeAutoBackup(now)
+			}
+		}
+	}()
+}
+
+func (app *App) stopAutoBackup() {
+	if app.autoBackupStop == nil {
+		return
+	}
+	close(app.autoBackupStop)
+	<-app.autoBackupDone
+	app.autoBackupStop = nil
+	app.autoBackupDone = nil
+}
+
+// maybeAutoBackup 在到达设定时间且当天尚未执行时触发一次自动备份。
+func (app *App) maybeAutoBackup(now time.Time) {
+	if app.store.setting("autoBackupEnabled", "false") != "true" {
+		return
+	}
+	value := strings.TrimSpace(app.store.setting("autoBackupTime", "03:00"))
+	scheduled, err := time.Parse("15:04", value)
+	if err != nil || now.Hour() != scheduled.Hour() || now.Minute() != scheduled.Minute() {
+		return
+	}
+	key := now.Format("2006-01-02") + " " + value
+	app.autoBackupMu.Lock()
+	if app.autoBackupLast == key {
+		app.autoBackupMu.Unlock()
+		return
+	}
+	app.autoBackupLast = key
+	app.autoBackupMu.Unlock()
+	app.runAutoBackup()
+}
+
+func (app *App) runAutoBackup() {
+	if app.engine.active() > 0 || !app.gate.TryLock() {
+		app.appendSystemLog("warn", "[AutoBackup] 跳过自动备份：有任务或请求正在执行")
+		return
+	}
+	defer app.gate.Unlock()
+	directory := filepath.Join(app.root, "backups", "auto")
+	name, err := app.createBackupIn(directory, "auto-")
+	if err != nil {
+		app.appendSystemLog("error", "[AutoBackup] 自动备份失败: "+err.Error())
+		return
+	}
+	app.appendSystemLog("info", "[AutoBackup] 已创建自动备份 "+name)
+	app.pruneAutoBackups(directory, autoBackupKeep)
+}
+
+// pruneAutoBackups 只保留最近的 keep 份自动备份，避免磁盘无限增长。
+func (app *App) pruneAutoBackups(directory string, keep int) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return
+	}
+	files := []struct {
+		name string
+		mod  time.Time
+	}{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".zip") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, struct {
+			name string
+			mod  time.Time
+		}{entry.Name(), info.ModTime()})
+	}
+	if len(files) <= keep {
+		return
+	}
+	sort.Slice(files, func(left, right int) bool { return files[left].mod.After(files[right].mod) })
+	for _, file := range files[keep:] {
+		_ = os.Remove(filepath.Join(directory, file.name))
+	}
 }

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# 本地构建若未显式设置公钥，则读取仓库内的 update-public-key.txt（公钥不是秘密）。
+if [ -z "${CABBAGE_UPDATE_PUBLIC_KEY:-}" ] && [ -f update-public-key.txt ]; then
+  CABBAGE_UPDATE_PUBLIC_KEY=$(tr -d '\r\n' < update-public-key.txt)
+  export CABBAGE_UPDATE_PUBLIC_KEY
+fi
 npm --prefix web ci
 npm --prefix web run build
 version=$(tr -d '\r\n' < VERSION)

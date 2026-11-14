@@ -2,6 +2,10 @@ param([string]$TargetOS = 'windows', [string]$TargetArch = 'amd64', [switch]$Ski
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
+# 本地构建若未显式设置公钥，则读取仓库内的 update-public-key.txt（公钥不是秘密）。
+if (-not $env:CABBAGE_UPDATE_PUBLIC_KEY -and (Test-Path -LiteralPath 'update-public-key.txt')) {
+    $env:CABBAGE_UPDATE_PUBLIC_KEY = (Get-Content -LiteralPath 'update-public-key.txt' -Raw -Encoding UTF8).Trim()
+}
 if (-not (Get-Command go -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath 'D:\Go\bin\go.exe')) { $env:PATH = 'D:\Go\bin;' + $env:PATH }
 New-Item -ItemType Directory -Force -Path '.tools\gopath', '.tools\gocache', '.tools\tmp', '.tools\npm-cache', 'dist' | Out-Null
 $env:GOPATH = Join-Path $projectRoot '.tools\gopath'

@@ -25,14 +25,14 @@ if (process.argv[2] === 'keygen') {
   await writeFile(path.join(directory, 'manifest.json'), manifest)
   await writeFile(path.join(directory, 'SHA256SUMS'), assets.map(asset => asset.sha256 + '  ' + asset.name).join('\n') + '\n')
 
-  const key = process.env.RELEASE_PRIVATE_KEY
-  const publicKeyVar = (process.env.CABBAGE_UPDATE_PUBLIC_KEY || '').trim()
+  const key = process.env.RELEASE_PRIVATE_KEY || await readFile('release-private.key', 'utf8').catch(() => '')
+  const filePublicKey = await readFile('update-public-key.txt', 'utf8').catch(() => '')
+  const publicKeyVar = (process.env.CABBAGE_UPDATE_PUBLIC_KEY || filePublicKey).trim()
   if (!key) {
     if (publicKeyVar) {
-      console.warn('CABBAGE_UPDATE_PUBLIC_KEY is set but RELEASE_PRIVATE_KEY is missing; publishing UNSIGNED manifest. Updates will be verified by SHA-256 only.')
-    } else {
-      console.log('No signing key configured; publishing unsigned manifest. Updates will be verified by SHA-256 only.')
+      throw new Error('检测到 update-public-key.txt / CABBAGE_UPDATE_PUBLIC_KEY 但没有私钥，已拒绝生成未签名清单')
     }
+    console.log('No signing key configured; publishing unsigned manifest. Updates will be verified by SHA-256 only.')
     console.log('Generated manifest.json and SHA256SUMS (unsigned) for ' + assets.length + ' assets')
   } else {
     const publicKey = createPublicKey(key).export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64')

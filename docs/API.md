@@ -10,7 +10,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 
 | 资源 | 方法 / 路径（省略前缀） | 形状 |
 | --- | --- | --- |
-| token | GET /open/auth/token | client_id、client_secret 查询参数；可选 expiresIn（60–2592000 秒，默认 7200）或 permanent=1；token、token_type、expiration（Unix 秒，0 表示永久）、expiresIn、permanent |
+| token | POST /open/auth/token | JSON 请求体 client_id、client_secret；可选 expiresIn（60–2592000 秒，默认 7200）或 permanent:true；token、token_type、expiration（Unix 秒，0 表示永久）、expiresIn、permanent。凭证不接受 URL 查询参数 |
 | 登录日志 | GET /api/user/login-log | 仅管理员；数组项 timestamp（毫秒）、address、ip、platform（mobile/desktop）、status（0 成功、1 失败），最多保留 100 条 |
 | 通知日志 | GET /api/system/notify-log | 仅管理员；数组项 id、timestamp、title、content、status（0 成功、1 失败）、notifyType、source（system/script）、scriptName，最多保留 100 条 |
 | 系统日志 | GET / DELETE /api/system/log | GET 返回系统运行日志文本（末尾最多 2MB）；DELETE 清空 |
@@ -59,10 +59,10 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | 订阅管理 | GET / POST / PUT / DELETE /subscriptions | POST/PUT 对象；type=git-repo/file、url、alias、name、schedule、branch、whitelist、blacklist、autoAddCron、autoDelCron |
 | 订阅操作 | PUT /subscriptions/run,stop,enable,disable | ID 数组 |
 | 订阅日志 | GET /subscriptions/:id/log、/:id/logs | 最新文本 / 运行数组 |
-| 应用管理 | GET / POST / PUT / DELETE /api/apps | name/scopes/expiresAt；创建返回 client_id/client_secret；管理员查询列表或详情可直接读取 client_secret |
-| 重置密钥 | PUT /api/apps/:id/reset-secret | 撤销 token，返回新 secret，并保存新的可查看密钥 |
+| 应用管理 | GET / POST / PUT / DELETE /api/apps | name/scopes/expiresAt；创建返回 client_id/client_secret（secret 只返回一次）；列表与详情不返回 client_secret，数据库仅保存散列 |
+| 重置密钥 | PUT /api/apps/:id/reset-secret | 撤销 token，返回新 secret（只显示一次），数据库仅保存散列 |
 | 创建 Authorization | POST /api/apps/:id/token | {expiresIn} 秒或 {permanent:true}；到期返回 403；返回 token、expiration（0 表示永久）、expiresIn、permanent、client_id；Authorization 与 Client ID 用途不同 |
-| Authorization 列表 | GET /api/apps/:id/tokens | 管理员读取该应用的令牌登记，含 token、created、expires、permanent、active；刷新页面后可恢复显示 |
+| Authorization 列表 | GET /api/apps/:id/tokens | 管理员读取该应用的令牌登记元数据（id、name、created、expires、permanent、active）；数据库仅保存令牌散列，不返回令牌本身 |
 | 撤销 Authorization | DELETE /api/apps/:id/tokens/:tokenId | 同时删除令牌登记与 session，立即失效 |
 
 任务 status=0 表示有在途实例，1 表示空闲；isDisabled/isPinned=0/1。变量 status=0 启用，1 停用。依赖 status=0 安装成功，1 等待或安装中，2 未就绪。lastStatus 和运行记录另用字符串状态，不能与青龙所有内部枚举直接等值比较。
@@ -128,7 +128,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | GET /api/system/runtimes/progress | 运行时安装进度 |
 | GET /api/system/about | 关于页信息：version、commit、go、os、arch、platform、osName、hostname、kernel、restartMode、signedUpdates |
 | POST /api/system/restart | 重启面板服务（有任务运行时返回 409）；容器/systemd 下退出交由外部拉起，原生环境由看守脚本重新拉起 |
-| GET / PUT /api/system/settings | concurrency/timeout/retentionDays/githubRepo/webhookURL/notifyFailures/npmMirror/pythonMirror/linuxMirror/pythonPath/pythonVersion/runtimePythonMirror/runtimeNodeMirror/runtimeGitMirror/runtimeMambaMirror/runtimeMambaChannel |
+| GET / PUT /api/system/settings | concurrency/timeout/retentionDays/githubRepo/webhookURL/notifyFailures/npmMirror/pythonMirror/linuxMirror/pythonPath/pythonVersion/runtimePythonMirror/runtimeNodeMirror/runtimeGitMirror/runtimeMambaMirror/runtimeMambaChannel/trustedProxies/outboundAllowlist |
 | POST /api/system/python/rebuild | 用当前配置的 Python 重建 venv 并重装 Python 依赖；有任务运行时返回 409 |
 | GET / PUT / DELETE /api/user/ip-blacklist | IP 黑名单：GET 列表、PUT {ip} 添加、DELETE {ip} 移除；命中后无法登录 |
 | PUT /api/system/cleanup | 清理过期日志 |
