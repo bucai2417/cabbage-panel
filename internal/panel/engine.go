@@ -664,14 +664,26 @@ func (app *App) installHelpers() error {
 }
 
 // taskHelperSource 是随版本内置的 task 命令脚本。
-// taskHelperSource 用 POSIX sh 语法编写，兼容 bash 与 MinGit 的 usr/bin/sh.exe。
-// 不使用 mapfile、seq、进程替换等 bash 专有特性，便携 Git 安装后即可独立提供 Shell。
-const taskHelperSource = `#!/bin/sh
+// 脚本使用 bash 数组处理并发账号，因此必须由 bash 解释；shebang 指向 bash，
+// 并在 sh 被误用时自动切换到 bash，避免 Debian 的 dash 报语法错误。
+const taskHelperSource = `#!/usr/bin/env bash
 # 大白菜面板 task 助手。
 #   task <脚本>                  依次执行
 #   task <脚本> now              立即执行（忽略随机延迟），前台输出日志
 #   task <脚本> conc <变量> [n...] 并发执行：把变量按 & 拆分，逐个并发运行
 #   task <脚本> desi <变量> n...  指定账号执行：只跑指定序号（支持 1-3 / 1~3 / 1_3）
+
+# 若被 sh/dash 解释（无数组支持），自动切换到 bash 重新执行。
+if [ -z "${BASH_VERSION:-}" ]; then
+  for candidate in "$(command -v bash 2>/dev/null)" /bin/bash /usr/bin/bash /usr/local/bin/bash; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      exec "$candidate" "$0" "$@"
+    fi
+  done
+  echo "task 需要 bash 才能运行，请安装 bash 或设置 CABBAGE_BASH" >&2
+  exit 127
+fi
+
 set -u
 
 script="${1:-}"

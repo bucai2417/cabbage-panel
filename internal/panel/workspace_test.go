@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -494,5 +495,36 @@ func TestTokenCipherRoundTripAndExpiryPurge(test *testing.T) {
 	}
 	if len(panel.data(test, "GET", fmt.Sprintf("/api/apps/%d/tokens", appID), nil).([]any)) != 2 {
 		test.Fatal("purge removed the wrong authorizations")
+	}
+}
+
+// task 助手依赖 bash 数组处理并发账号。Debian 的 /bin/sh 是 dash，
+// 直接以 sh 解释会报 `Syntax error: "(" unexpected`，因此脚本必须能自举到 bash。
+func TestTaskHelperBootstrapsBash(test *testing.T) {
+	dir := test.TempDir()
+	target := filepath.Join(dir, "task")
+	if err := os.WriteFile(target, []byte(taskHelperSource), 0700); err != nil {
+		test.Fatal(err)
+	}
+	script := filepath.Join(dir, "echo.py")
+	if err := os.WriteFile(script, []byte("print('task helper ok')\n"), 0600); err != nil {
+		test.Fatal(err)
+	}
+	python := findPython()
+	// 分别用 bash 与 sh 执行，sh 场景验证自举逻辑不会因 dash 不支持数组而失败。
+	for _, shell := range []string{"bash", "sh"} {
+		if _, err := exec.LookPath(shell); err != nil {
+			continue
+		}
+		command := exec.Command(shell, target, script)
+		command.Dir = dir
+		command.Env = append(os.Environ(), "CABBAGE_PYTHON="+python, "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			test.Fatalf("%s task helper failed: %v\n%s", shell, err, output)
+		}
+		if !strings.Contains(string(output), "task helper ok") {
+			test.Fatalf("%s task helper output mismatch: %s", shell, output)
+		}
 	}
 }
