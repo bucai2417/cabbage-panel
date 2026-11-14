@@ -30,6 +30,7 @@ Go 后端、Vue 3 前端、SQLite 数据库，前端静态资源嵌入单个程�
 
 发行 ZIP 用于运行，不包含开发源码；其他 Agent 请打开源码根目录，从 [AGENTS.md](AGENTS.md) 开始。
 
+无服务器的可以使用安卓版（无需对接）：https://github.com/bucai2417/B-Panel
 ## 目录
 
 - [功能](#功能)
