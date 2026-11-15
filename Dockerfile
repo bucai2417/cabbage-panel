@@ -60,7 +60,26 @@ WORKDIR /source/web
 COPY web/package*.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
-RUN npm run build
+# 构建上下文不完整时明确报错。缺子目录时 vite 只会报
+# "Could not resolve ./components/X.vue"，容易被误判成代码问题。
+RUN set -eux; \
+    missing=""; \
+    for f in src/App.vue src/main.js src/components/Icon.vue src/pages/Dashboard.vue; do \
+      [ -f "$f" ] || missing="$missing $f"; \
+    done; \
+    if [ -n "$missing" ]; then \
+      echo "" >&2; \
+      echo "=== 构建上下文缺少文件:$missing ===" >&2; \
+      echo "--- src 下实际内容 ---" >&2; \
+      find src -maxdepth 2 -print 2>/dev/null | sort >&2 || true; \
+      echo "--- 大小写检查（Windows 不敏感、Linux 敏感）---" >&2; \
+      find . -maxdepth 3 \( -iname 'components' -o -iname 'pages' \) -print >&2 || true; \
+      echo "--- web/ 顶层 ---" >&2; \
+      ls -la . >&2 || true; \
+      echo "=== 请在构建机上确认 web/src 完整；必要时重新 git clone ===" >&2; \
+      exit 1; \
+    fi; \
+    npm run build
 
 # 后端构建：下载 Go 二进制。CGO_ENABLED=0 + 纯 Go 的 modernc.org/sqlite，
 # 产物是静态二进制，可跨 libc 运行。
