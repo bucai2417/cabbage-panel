@@ -11,6 +11,11 @@ services:
         #   DOCKER_MIRROR= docker compose build   # 空值 = 直连 Docker Hub
         # 注意用 ${VAR-默认}（无冒号）：只有未设置才回落默认，显式空值保留。
         DOCKER_MIRROR: ${DOCKER_MIRROR-docker.1ms.run/}
+        # 构建工具链：Node / Go 从国内镜像下二进制，不走 node/golang 官方镜像。
+        NODE_VERSION: ${NODE_VERSION:-24.22.3}
+        GO_VERSION: ${GO_VERSION:-1.27.4}
+        NODE_MIRROR: ${NODE_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/nodejs-release}
+        GO_MIRROR: ${GO_MIRROR:-https://mirrors.aliyun.com/golang}
         # 构建依赖源默认走国内；境外网络可在 .env 或命令行覆盖为官方源。
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
         GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}

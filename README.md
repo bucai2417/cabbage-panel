@@ -154,11 +154,13 @@ docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.1 .
 PYTHON_VERSION=3.12 docker compose build
 ```
 
-构建默认使用国内镜像源（npmmirror、goproxy.cn、清华 Debian 源），并内置 `docker.1ms.run` 加速拉取基础镜像，避免直连境外源卡住。境外网络可覆盖为官方源：
+构建默认使用国内镜像源（npmmirror、goproxy.cn、清华 Debian 源），Node 和 Go 工具链直接从清华 / 阿里云镜像下载二进制，基础镜像走 `docker.1ms.run` 加速站，避免直连境外源卡住。境外网络可覆盖为官方源：
 
 ```bash
 docker compose build \
   --build-arg DOCKER_MIRROR= \
+  --build-arg NODE_MIRROR=https://nodejs.org/dist \
+  --build-arg GO_MIRROR=https://go.dev/dl \
   --build-arg NPM_REGISTRY=https://registry.npmjs.org \
   --build-arg GOPROXY=https://proxy.golang.org,direct \
   --build-arg DEBIAN_MIRROR=http://deb.debian.org/debian \
@@ -169,11 +171,13 @@ docker compose build \
 
 **构建很慢或卡住**时：
 
-构建阶段已用精简镜像（`node:24-alpine`、`golang:1.27-alpine`）并开启依赖层缓存，基础镜像默认走 `docker.1ms.run` 加速站。如果 `--progress=plain` 显示某个层停在 `0B / xxMB` 不动，多半是加速站本身不可用，可切换其他加速站或改回官方源：
+构建过程中**只需拉一个镜像**（`python:slim-bookworm`，通常本机已缓存），Node 和 Go 从国内镜像下二进制包——实测加速站下载镜像层只有 0.1–0.4 MB/s，而清华 Node 源、阿里云 Go 源有 4–5 MB/s，差 10 倍以上。如果 `--progress=plain` 显示卡在下载：
 
 ```bash
-# 方式一：换一个加速站（写进 .env 后长期生效）
+# 方式一：换基础镜像加速站或二进制源（写进 .env 后长期生效）
 #   .env 里加一行：DOCKER_MIRROR=docker.m.daocloud.io/library/
+#   或 NODE_MIRROR=https://mirrors.aliyun.com/nodejs-release
+#      GO_MIRROR=https://mirrors.ustc.edu.cn/golang
 docker compose build
 
 # 方式二：给 Docker 配置全局镜像加速

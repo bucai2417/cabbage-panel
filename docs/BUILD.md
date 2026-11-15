@@ -17,7 +17,7 @@
 
 ### Docker 与 Python 版本
 
-运行时镜像基于官方 `python:${PYTHON_VERSION}-slim-bookworm`，Node 从 `node:24-bookworm-slim` 复制进来（同为 bookworm，glibc 一致）。默认 Python 3.10，构建时可切换：
+运行时镜像基于官方 `python:${PYTHON_VERSION}-slim-bookworm`，这是构建过程中唯一需要拉取的镜像。Node 和 Go 不拉官方镜像，改为从国内镜像下载二进制包。默认 Python 3.10，构建时可切换：
 
 ```
 docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.1 .
@@ -37,6 +37,8 @@ Dockerfile 默认使用国内依赖源，避免构建阶段直连境外卡住：
 
 | 阶段 | 默认源 | 覆盖参数 |
 | --- | --- | --- |
+| Node 构建工具链 | 清华 `nodejs-release` | `NODE_MIRROR` / `NODE_VERSION` |
+| Go 构建工具链 | 阿里云 `golang` | `GO_MIRROR` / `GO_VERSION` |
 | 前端 `npm ci` | `https://registry.npmmirror.com` | `NPM_REGISTRY` |
 | 后端 `go mod download` | `https://goproxy.cn,direct` | `GOPROXY` |
 | 运行时 `apt-get` | 清华 Debian 源 | `DEBIAN_MIRROR` / `DEBIAN_SECURITY_MIRROR` |
@@ -47,6 +49,8 @@ Dockerfile 默认使用国内依赖源，避免构建阶段直连境外卡住：
 ```
 docker compose build \
   --build-arg DOCKER_MIRROR= \
+  --build-arg NODE_MIRROR=https://nodejs.org/dist \
+  --build-arg GO_MIRROR=https://go.dev/dl \
   --build-arg NPM_REGISTRY=https://registry.npmjs.org \
   --build-arg GOPROXY=https://proxy.golang.org,direct \
   --build-arg DEBIAN_MIRROR=http://deb.debian.org/debian \
@@ -55,24 +59,24 @@ docker compose build \
 
 ### 构建慢或卡住
 
-**构建阶段镜像已尽量精简**：前端用 `node:24-alpine`，后端用 `golang:1.27-alpine`（约 250MB，bookworm 版约 800MB），产物 `CGO_ENABLED=0` 静态二进制。运行时仍需 glibc，所以最终镜像基于 `python:slim-bookworm`。
+**为什么不用 node / golang 官方镜像**：实测国内镜像加速站下载层只有 0.1–0.4 MB/s，拉 `node:24-alpine` + `golang:1.27-alpine` 约 350MB 要几十分钟。清华 Node 源和阿里云 Go 源实测 4–5 MB/s，因此构建阶段改为下二进制包，只保留一个必须的 `python:slim-bookworm` 基础镜像（通常本机已缓存）。产物仍是 `CGO_ENABLED=0` 静态二进制。
 
 如果仍然很慢，先 `docker compose build --progress=plain` 看卡在哪：
 
-1. **卡在拉取基础镜像**（`FROM ...` 行，显示 `0B / 51.10MB` 这类不动的下载）——基础镜像默认已走 `docker.1ms.run` 加速站，若这个站也不可用，换站或改回官方源：
-   - 在 `.env` 里设 `DOCKER_MIRROR=docker.m.daocloud.io/library/`（仓库自带 `.env.example` 模板），之后 `docker compose build` 长期生效；设 `DOCKER_MIRROR=` 空值则直连 Docker Hub。
+1. **卡在拉取 `python:slim-bookworm`**（`FROM ...` 行显示 `0B / 51.10MB` 不动）——这是唯一需要拉的基础镜像：
+   - 在 `.env` 里换加速站，例如 `DOCKER_MIRROR=docker.m.daocloud.io/library/`（仓库自带 `.env.example` 模板）；设 `DOCKER_MIRROR=` 空值则直连 Docker Hub。
    - 给 Docker 配全局镜像加速：Docker Desktop → Settings → Docker Engine 加 `"registry-mirrors": ["https://docker.1ms.run"]`，或在 Linux 的 `/etc/docker/daemon.json` 加同样配置后 `systemctl restart docker`。
-   - 用 `DOCKER_MIRROR` 临时改镜像前缀：
-     ```
-     DOCKER_MIRROR=docker.m.daocloud.io/library/ docker compose build
-     ```
    - 先在能联网的机器 `docker pull` 后 `docker save`，拷到服务器 `docker load`。
 
-2. **卡在 `npm ci` / `go mod download` / `apt-get update`**——依赖源问题，确认上面的构建参数已传入，或改 Dockerfile 顶部 `ARG` 默认值。
+2. **卡在下载 Node / Go 二进制**——换镜像源，或在 `.env` 里覆盖 `NODE_MIRROR` / `GO_MIRROR`。可用源：
+   - Node：清华 `https://mirrors.tuna.tsinghua.edu.cn/nodejs-release`、阿里云 `https://mirrors.aliyun.com/nodejs-release`
+   - Go：阿里云 `https://mirrors.aliyun.com/golang`、中科大 `https://mirrors.ustc.edu.cn/golang`
 
-3. **每次改代码都重新下载依赖**——构建缓存被 `COPY . .` 打断。Dockerfile 已把 `COPY go.mod go.sum` 和 `COPY web/package*.json` 放在源码复制之前，只要依赖清单不变就会命中缓存。若清过缓存，首次构建会重新下载，之后会快。
+3. **卡在 `npm ci` / `go mod download` / `apt-get update`**——依赖源问题，确认上面的构建参数已传入，或改 Dockerfile 顶部 `ARG` 默认值。
 
-4. **一次性构建，不做本地开发**——可在开发机构建好镜像再导出：
+4. **每次改代码都重新下载依赖**——构建缓存被 `COPY . .` 打断。Dockerfile 已把 `COPY go.mod go.sum` 和 `COPY web/package*.json` 放在源码复制之前，工具链下载也在单独的 `RUN` 层，只要依赖清单和版本不变就会命中缓存。若清过缓存，首次构建会重新下载，之后会快。
+
+5. **一次性构建，不做本地开发**——可在开发机构建好镜像再导出：
    ```
    docker build -t cabbage-panel:1.0.1 .
    docker save cabbage-panel:1.0.1 | gzip > cabbage-panel.tar.gz
