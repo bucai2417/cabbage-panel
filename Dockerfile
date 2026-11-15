@@ -8,16 +8,14 @@
 #    构建依然能成功。构建上下文只需要本 Dockerfile 本身。
 #
 # 常用覆盖参数：
-#   docker build --build-arg SOURCE_REF=v1.0.1 -t cabbage-panel:1.0.1 .
+#   docker build --build-arg SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1 -t cabbage-panel:1.0.1 .
 #   docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.1 .
 #   docker build --build-arg DOCKER_MIRROR= -t cabbage-panel:1.0.1 .   # 直连 Docker Hub
 
 ARG PYTHON_VERSION=3.10
 
-# 源码来源。默认 main 分支；可指定 tag 或 commit。
-ARG SOURCE_REPO=bucai2417/cabbage-panel
-ARG SOURCE_REF=main
-ARG SOURCE_MIRROR=https://codeload.github.com
+# 源码地址（完整 tarball URL）。默认 main 分支，见 source 阶段。
+ARG SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/heads/main
 
 # 构建工具链版本与下载源。
 ARG NODE_VERSION=24.22.3
@@ -54,17 +52,15 @@ RUN if [ -n "$DEBIAN_MIRROR" ]; then \
 ENV PATH=/opt/node/bin:$PATH
 
 # ---------- 源码：从 GitHub 下载完整 tarball ----------
+# 用 ADD 而不是 RUN curl：ADD 对远程 URL 会做条件请求（ETag / Last-Modified），
+# 分支内容变化时自动失效缓存，内容没变则复用缓存。用 RUN curl 时 URL 是常量，
+# Docker 只看指令文本判断缓存，分支更新后仍会用第一次下载的旧源码。
 FROM base AS source
-ARG SOURCE_REPO
-ARG SOURCE_REF
-ARG SOURCE_MIRROR
+# 完整源码地址。默认 main 分支；要固定版本就传 tag 形式，例如：
+#   --build-arg SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1
+ARG SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/heads/main
+ADD ${SOURCE_URL} /tmp/src.tar.gz
 RUN set -eux; \
-    url="$SOURCE_MIRROR/$SOURCE_REPO/tar.gz/refs/heads/$SOURCE_REF"; \
-    echo "下载源码: $url"; \
-    if ! curl -fsSL --retry 3 --retry-delay 2 "$url" -o /tmp/src.tar.gz; then \
-      echo "分支下载失败，改用 tag 路径重试" >&2; \
-      curl -fsSL --retry 3 --retry-delay 2 "$SOURCE_MIRROR/$SOURCE_REPO/tar.gz/refs/tags/$SOURCE_REF" -o /tmp/src.tar.gz; \
-    fi; \
     mkdir -p /src; \
     tar -xzf /tmp/src.tar.gz -C /src --strip-components=1; \
     rm /tmp/src.tar.gz; \
@@ -75,7 +71,8 @@ RUN set -eux; \
              deploy/docker-entrypoint.sh; do \
       if [ ! -f "/src/$f" ]; then echo "FATAL: 源码缺少 $f" >&2; exit 1; fi; \
     done; \
-    echo "源码完整，文件数: $(find /src -type f | wc -l)"
+    echo "源码完整，文件数: $(find /src -type f | wc -l)"; \
+    echo "入口脚本 SHA256: $(sha256sum /src/deploy/docker-entrypoint.sh | cut -d' ' -f1)"
 
 # ---------- 前端构建 ----------
 FROM source AS frontend

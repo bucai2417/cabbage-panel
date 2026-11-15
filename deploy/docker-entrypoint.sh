@@ -54,9 +54,13 @@ case "$parent_owner" in
 esac
 add_candidate "$DEFAULT_UID:$DEFAULT_GID"
 
+# 探测目标身份能否在数据目录里建文件。已有文件不参与判断——旧锁文件由
+# 下面的清理步骤处理，否则 root 创建的 0600 锁会让所有非 root 候选都失败。
 can_write() {
-  TEST_DIR="$DATA_DIR" gosu "$1" \
-    sh -c 'touch "$TEST_DIR/.write-test" && rm -f "$TEST_DIR/.write-test"' 2>/dev/null
+  TEST_DIR="$DATA_DIR" gosu "$1" sh -c '
+    touch "$TEST_DIR/.write-test" || exit 1
+    rm -f "$TEST_DIR/.write-test" || exit 1
+  ' 2>/dev/null
 }
 
 CHOSEN=""
@@ -86,6 +90,31 @@ if [ -z "$CHOSEN" ]; then
 fi
 
 echo "运行身份: $CHOSEN"
+
+# 选中身份后，确保已有文件都可读写。锁文件是 flock 用的空文件，不含数据，
+# 权限不符直接删掉重建；数据库及其 WAL/SHM 不能删，改为尝试改属主，失败时
+# 明确提示（否则启动后只会反复报 permission denied，很难定位）。
+if [ "$CHOSEN" != "0:0" ]; then
+  if [ -e "$DATA_DIR/cabbage.lock" ] && \
+     ! TEST_DIR="$DATA_DIR" gosu "$CHOSEN" sh -c \
+       'exec 3<>"$TEST_DIR/cabbage.lock"' 2>/dev/null; then
+    echo "旧锁文件不可用，删除后重建: $DATA_DIR/cabbage.lock"
+    rm -f "$DATA_DIR/cabbage.lock" 2>/dev/null || true
+  fi
+  for f in cabbage.db cabbage.db-wal cabbage.db-shm setup.key token.key; do
+    path="$DATA_DIR/$f"
+    [ -e "$path" ] || continue
+    if ! TEST_FILE="$path" gosu "$CHOSEN" sh -c '[ -r "$TEST_FILE" ] && [ -w "$TEST_FILE" ]' 2>/dev/null; then
+      echo "尝试修正 $f 属主 -> $CHOSEN"
+      chown "$CHOSEN" "$path" 2>/dev/null || true
+      if ! TEST_FILE="$path" gosu "$CHOSEN" sh -c '[ -r "$TEST_FILE" ] && [ -w "$TEST_FILE" ]' 2>/dev/null; then
+        echo "警告: $f 仍无法被 $CHOSEN 读写，启动可能失败。" >&2
+        echo "在宿主机执行: chown -R <数据目录> 并检查 ACL 权限" >&2
+      fi
+    fi
+  done
+fi
+
 # 确保 HOME 可写，git 等工具需要。
 mkdir -p "$HOME_DIR" && chown -R "$CHOSEN" "$HOME_DIR" 2>/dev/null || true
 

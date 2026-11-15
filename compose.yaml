@@ -3,11 +3,10 @@ services:
     build:
       context: .
       args:
-        # 源码来源：构建时从 GitHub 下载完整 tarball，不使用本地源码目录。
-        # 这样服务器上的源码树不完整也不影响构建。
-        # 指定版本：SOURCE_REF=v1.0.1 docker compose build
-        SOURCE_REPO: ${SOURCE_REPO:-bucai2417/cabbage-panel}
-        SOURCE_REF: ${SOURCE_REF:-main}
+        # 源码地址。默认 main 分支；固定版本用 tag 形式，例如
+        #   SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1
+        # 用 ADD 拉取，Docker 会按 ETag 判断缓存：分支内容变了就重新下载。
+        SOURCE_URL: ${SOURCE_URL:-https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/heads/main}
         # 可用环境变量覆盖：PYTHON_VERSION=3.11 docker compose build
         PYTHON_VERSION: ${PYTHON_VERSION:-3.10}
         # 基础镜像仓库前缀，默认已内置 1ms 加速站，国内可直接构建。

@@ -42,8 +42,8 @@ PYTHON_VERSION=3.12 docker compose build
 默认取 `main` 分支，可指定 tag 或 commit：
 
 ```
-docker build --build-arg SOURCE_REF=v1.0.1 -t cabbage-panel:1.0.1 .
-SOURCE_REF=v1.0.1 docker compose build
+docker build --build-arg SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1 -t cabbage-panel:1.0.1 .
+SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1 docker compose build
 ```
 
 构建阶段会校验 12 个关键文件（`go.mod`、`cmd/cabbage/main.go`、`web/src/components/Icon.vue` 等），缺失时直接报出文件名并退出，不会等到编译阶段才失败。
@@ -54,7 +54,7 @@ Dockerfile 默认使用国内依赖源，避免构建阶段直连境外卡住：
 
 | 阶段 | 默认源 | 覆盖参数 |
 | --- | --- | --- |
-| 源码 tarball | `codeload.github.com` | `SOURCE_MIRROR` / `SOURCE_REPO` / `SOURCE_REF` |
+| 源码 tarball | `codeload.github.com` | `SOURCE_URL` |
 | Node 构建工具链 | 清华 `nodejs-release` | `NODE_MIRROR` / `NODE_VERSION` |
 | Go 构建工具链 | 阿里云 `golang` | `GO_MIRROR` / `GO_VERSION` |
 | 前端 `npm ci` | `https://registry.npmmirror.com` | `NPM_REGISTRY` |
@@ -67,7 +67,6 @@ Dockerfile 默认使用国内依赖源，避免构建阶段直连境外卡住：
 ```
 docker compose build \
   --build-arg DOCKER_MIRROR= \
-  --build-arg SOURCE_MIRROR=https://codeload.github.com \
   --build-arg NODE_MIRROR=https://nodejs.org/dist \
   --build-arg GO_MIRROR=https://go.dev/dl \
   --build-arg NPM_REGISTRY=https://registry.npmjs.org \
@@ -87,7 +86,7 @@ docker compose build \
    - 给 Docker 配全局镜像加速：Docker Desktop → Settings → Docker Engine 加 `"registry-mirrors": ["https://docker.1ms.run"]`，或在 Linux 的 `/etc/docker/daemon.json` 加同样配置后 `systemctl restart docker`。
    - 先在能联网的机器 `docker pull` 后 `docker save`，拷到服务器 `docker load`。
 
-2. **卡在下载源码 tarball**——`codeload.github.com` 在国内通常可用（约 550KB，5 秒）。不通时用 `SOURCE_MIRROR` 指向代理，或先在能联网的机器构建镜像再 `docker save` / `docker load`。
+2. **卡在下载源码 tarball**——`codeload.github.com` 在国内通常可用（约 550KB，5 秒）。不通时用 `SOURCE_URL` 指向镜像地址，或先在能联网的机器构建镜像再 `docker save` / `docker load`。
 
 3. **卡在下载 Node / Go 二进制**——换镜像源，或在 `.env` 里覆盖 `NODE_MIRROR` / `GO_MIRROR`。可用源：
    - Node：清华 `https://mirrors.tuna.tsinghua.edu.cn/nodejs-release`、阿里云 `https://mirrors.aliyun.com/nodejs-release`
@@ -95,7 +94,7 @@ docker compose build \
 
 4. **卡在 `npm ci` / `go mod download` / `apt-get update`**——依赖源问题，确认上面的构建参数已传入，或改 Dockerfile 顶部 `ARG` 默认值。
 
-5. **改代码后构建结果没变**——源码来自 GitHub，需要先 `git push`。想用本地未推送的代码构建，改 `SOURCE_REF` 指向对应 commit 并确保已推送。
+5. **改代码后构建结果没变**——源码来自 GitHub，需要先 `git push`。`ADD` 会按 ETag 判断缓存，分支内容变化时会自动重新下载；若仍命中旧缓存，加 `--no-cache` 重建。
 
 6. **一次性构建，不做本地开发**——可在开发机构建好镜像再导出：
    ```

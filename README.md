@@ -172,7 +172,7 @@ docker compose build \
 指定版本构建：
 
 ```bash
-SOURCE_REF=v1.0.1 docker compose build
+SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1 docker compose build
 ```
 
 也可以在 `.env` 中设置同名变量后 `docker compose build`（仓库自带 `.env.example` 模板，复制为 `.env` 即可）。
