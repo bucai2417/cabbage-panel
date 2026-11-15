@@ -1,4 +1,23 @@
-# 源码与入口脚本都由 Dockerfile 内部从 GitHub tarball 获取，
-# 构建上下文只需要 Dockerfile 本身，其余全部排除。
-*
-!Dockerfile
+# 源码通过 COPY 进入构建阶段。Docker 按文件内容哈希判断缓存，git pull 后
+# 必然重建，不会出现「用了旧代码」的问题。
+#
+# 只排除运行数据、构建产物和本机缓存，保留全部源码。
+.git
+.github
+.tools
+data
+dist
+designs
+web/node_modules
+web/dist
+test-results
+web/test-results
+web/playwright-report
+.env
+release-private.key
+*.exe
+*.log
+*.key
+.impeccable
+web/.impeccable
+web/.tools

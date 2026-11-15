@@ -156,7 +156,7 @@ docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.1 .
 PYTHON_VERSION=3.12 docker compose build
 ```
 
-构建默认使用国内镜像源（npmmirror、goproxy.cn、清华 Debian 源），Node 和 Go 工具链直接从清华 / 阿里云镜像下载二进制，基础镜像走 `docker.1ms.run` 加速站，避免直连境外源卡住。**源码在构建时从 GitHub 下载完整 tarball**，不使用本地源码目录——服务器上的源码树不完整也能构建成功。境外网络可覆盖为官方源：
+构建默认使用国内镜像源（npmmirror、goproxy.cn、清华 Debian 源），Node 和 Go 工具链直接从清华 / 阿里云镜像下载二进制，基础镜像走 `docker.1ms.run` 加速站，避免直连境外源卡住。**源码取自构建上下文**，`git pull` 后必然重建，不会出现「改了代码但镜像没变」。上下文不完整时自动回退从 GitHub 下载。境外网络可覆盖为官方源：
 
 ```bash
 docker compose build \
@@ -167,12 +167,6 @@ docker compose build \
   --build-arg GOPROXY=https://proxy.golang.org,direct \
   --build-arg DEBIAN_MIRROR=http://deb.debian.org/debian \
   --build-arg DEBIAN_SECURITY_MIRROR=http://security.debian.org/debian-security
-```
-
-指定版本构建：
-
-```bash
-SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1 docker compose build
 ```
 
 也可以在 `.env` 中设置同名变量后 `docker compose build`（仓库自带 `.env.example` 模板，复制为 `.env` 即可）。

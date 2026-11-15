@@ -3,19 +3,14 @@
 # 设计要点：
 # 1. 只拉一个基础镜像（python:slim-bookworm），Node / Go 从国内镜像下二进制。
 #    实测清华 Node 源、阿里云 Go 源 4-5 MB/s，镜像加速站只有 0.1-0.4 MB/s。
-# 2. 源码从 GitHub 下载完整 tarball，不使用构建上下文里的源码。
-#    这样即使服务器上的源码树不完整（缺目录 / 权限异常 / 部分文件没上传），
-#    构建依然能成功。构建上下文只需要本 Dockerfile 本身。
+# 2. 源码优先取自构建上下文，Docker 按内容哈希判断缓存，git pull 后必然重建。
+#    上下文源码不完整时自动回退从 GitHub 下载，保证构建仍能成功。
 #
 # 常用覆盖参数：
-#   docker build --build-arg SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1 -t cabbage-panel:1.0.1 .
 #   docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.1 .
 #   docker build --build-arg DOCKER_MIRROR= -t cabbage-panel:1.0.1 .   # 直连 Docker Hub
 
 ARG PYTHON_VERSION=3.10
-
-# 源码地址（完整 tarball URL）。默认 main 分支，见 source 阶段。
-ARG SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/heads/main
 
 # 构建工具链版本与下载源。
 ARG NODE_VERSION=24.22.3
@@ -51,27 +46,49 @@ RUN if [ -n "$DEBIAN_MIRROR" ]; then \
     && mkdir -p /app/data && chown cabbage:cabbage /app/data
 ENV PATH=/opt/node/bin:$PATH
 
-# ---------- 源码：从 GitHub 下载完整 tarball ----------
-# 用 ADD 而不是 RUN curl：ADD 对远程 URL 会做条件请求（ETag / Last-Modified），
-# 分支内容变化时自动失效缓存，内容没变则复用缓存。用 RUN curl 时 URL 是常量，
-# Docker 只看指令文本判断缓存，分支更新后仍会用第一次下载的旧源码。
+# ---------- 源码 ----------
+# 优先使用构建上下文里的源码：Docker 按文件内容哈希判断缓存，git pull 后
+# 必然重建，不存在「用了旧代码」的问题。
+#
+# 之前用 RUN curl / ADD 拉远程源码，在飞牛等只提供「构建」按钮的环境下会一直
+# 命中缓存：RUN 的 URL 是常量；ADD 靠 Last-Modified 判断，而 codeload.github.com
+# 只返回 ETag，缓存同样不失效。
+#
+# 上下文源码不完整时（缺目录、拷贝不全）自动回退到 GitHub 下载，保证构建仍能成功。
 FROM base AS source
-# 完整源码地址。默认 main 分支；要固定版本就传 tag 形式，例如：
-#   --build-arg SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1
-ARG SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/heads/main
-ADD ${SOURCE_URL} /tmp/src.tar.gz
+ARG SOURCE_REPO=bucai2417/cabbage-panel
+ARG SOURCE_REF=main
+ARG SOURCE_MIRROR=https://codeload.github.com
+ARG GIT_MIRROR=https://github.com
+COPY . /src
 RUN set -eux; \
-    mkdir -p /src; \
-    tar -xzf /tmp/src.tar.gz -C /src --strip-components=1; \
-    rm /tmp/src.tar.gz; \
-    echo "--- 源码完整性检查 ---"; \
-    for f in go.mod go.sum cmd/cabbage/main.go internal/panel/app.go \
-             web/package.json web/package-lock.json web/index.html web/vite.config.js \
-             web/src/App.vue web/src/main.js web/src/components/Icon.vue web/src/pages/Dashboard.vue \
-             deploy/docker-entrypoint.sh; do \
-      if [ ! -f "/src/$f" ]; then echo "FATAL: 源码缺少 $f" >&2; exit 1; fi; \
-    done; \
-    echo "源码完整，文件数: $(find /src -type f | wc -l)"; \
+    check() { \
+      for f in go.mod go.sum cmd/cabbage/main.go internal/panel/app.go \
+               web/package.json web/package-lock.json web/index.html web/vite.config.js \
+               web/src/App.vue web/src/main.js web/src/components/Icon.vue \
+               web/src/pages/Dashboard.vue deploy/docker-entrypoint.sh; do \
+        [ -f "/src/$f" ] || return 1; \
+      done; \
+    }; \
+    if check; then \
+      echo "源码来自构建上下文，文件数: $(find /src -type f | wc -l)"; \
+    else \
+      echo "构建上下文源码不完整，改为从 GitHub 下载"; \
+      commit="$(git ls-remote "$GIT_MIRROR/$SOURCE_REPO.git" "refs/heads/$SOURCE_REF" | cut -f1)"; \
+      if [ -z "$commit" ]; then \
+        commit="$(git ls-remote "$GIT_MIRROR/$SOURCE_REPO.git" "refs/tags/$SOURCE_REF^{}" | cut -f1)"; \
+      fi; \
+      if [ -z "$commit" ]; then echo "FATAL: 无法解析 $SOURCE_REF 的提交" >&2; exit 1; fi; \
+      echo "提交: $commit"; \
+      url="$SOURCE_MIRROR/$SOURCE_REPO/tar.gz/$commit"; \
+      echo "下载源码: $url"; \
+      curl -fsSL --retry 3 --retry-delay 2 "$url" -o /tmp/src.tar.gz; \
+      rm -rf /src; mkdir -p /src; \
+      tar -xzf /tmp/src.tar.gz -C /src --strip-components=1; \
+      rm /tmp/src.tar.gz; \
+      if ! check; then echo "FATAL: 下载的源码仍不完整" >&2; exit 1; fi; \
+      echo "源码来自 GitHub，文件数: $(find /src -type f | wc -l)"; \
+    fi; \
     echo "入口脚本 SHA256: $(sha256sum /src/deploy/docker-entrypoint.sh | cut -d' ' -f1)"
 
 # ---------- 前端构建 ----------

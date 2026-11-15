@@ -33,20 +33,13 @@ PYTHON_VERSION=3.12 docker compose build
 
 ### 源码来源
 
-**Docker 构建时从 GitHub 下载完整源码 tarball，不使用构建上下文里的源码。** 因此：
+**源码优先取自构建上下文。** Docker 按文件内容哈希判断缓存，`git pull` 后必然重建，不会出现「改了代码但镜像没变」的问题。
 
-- 服务器上的源码树不完整、缺目录、权限异常都不影响构建。
-- `.dockerignore` 只保留 `Dockerfile`，构建上下文几乎为空，传输最快。
-- 改了本地代码要构建进镜像，必须先 push 到 GitHub。
+构建上下文源码不完整时（缺目录、拷贝不全），自动回退从 GitHub 下载 tarball，所以即使服务器源码树残缺也能构建成功。回退时用 `SOURCE_REPO` / `SOURCE_REF` 指定仓库和分支。
 
-默认取 `main` 分支，可指定 tag 或 commit：
+构建阶段会校验 13 个关键文件（`go.mod`、`cmd/cabbage/main.go`、`web/src/components/Icon.vue`、`deploy/docker-entrypoint.sh` 等），缺失时直接报出文件名并退出，不会等到编译阶段才失败。
 
-```
-docker build --build-arg SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1 -t cabbage-panel:1.0.1 .
-SOURCE_URL=https://codeload.github.com/bucai2417/cabbage-panel/tar.gz/refs/tags/v1.0.1 docker compose build
-```
-
-构建阶段会校验 12 个关键文件（`go.mod`、`cmd/cabbage/main.go`、`web/src/components/Icon.vue` 等），缺失时直接报出文件名并退出，不会等到编译阶段才失败。
+> 历史说明：早期版本用 `RUN curl` 或 `ADD` 拉远程源码，在只提供「构建」按钮的环境（飞牛、群晖 Container Manager）下会一直命中缓存——`RUN` 的 URL 是常量，`ADD` 依赖 `Last-Modified` 而 codeload 只返回 `ETag`。改为上下文优先后不再有这个问题。
 
 ### Docker 构建镜像源
 
@@ -54,7 +47,7 @@ Dockerfile 默认使用国内依赖源，避免构建阶段直连境外卡住：
 
 | 阶段 | 默认源 | 覆盖参数 |
 | --- | --- | --- |
-| 源码 tarball | `codeload.github.com` | `SOURCE_URL` |
+| 源码回退下载 | `codeload.github.com` | `SOURCE_REPO` / `SOURCE_REF` |
 | Node 构建工具链 | 清华 `nodejs-release` | `NODE_MIRROR` / `NODE_VERSION` |
 | Go 构建工具链 | 阿里云 `golang` | `GO_MIRROR` / `GO_VERSION` |
 | 前端 `npm ci` | `https://registry.npmmirror.com` | `NPM_REGISTRY` |
@@ -86,7 +79,7 @@ docker compose build \
    - 给 Docker 配全局镜像加速：Docker Desktop → Settings → Docker Engine 加 `"registry-mirrors": ["https://docker.1ms.run"]`，或在 Linux 的 `/etc/docker/daemon.json` 加同样配置后 `systemctl restart docker`。
    - 先在能联网的机器 `docker pull` 后 `docker save`，拷到服务器 `docker load`。
 
-2. **卡在下载源码 tarball**——`codeload.github.com` 在国内通常可用（约 550KB，5 秒）。不通时用 `SOURCE_URL` 指向镜像地址，或先在能联网的机器构建镜像再 `docker save` / `docker load`。
+2. **卡在下载源码 tarball**——只有构建上下文源码不完整时才会触发。`codeload.github.com` 在国内通常可用（约 550KB，5 秒）。确保服务器上 `git pull` 完整即可避免走这条路。
 
 3. **卡在下载 Node / Go 二进制**——换镜像源，或在 `.env` 里覆盖 `NODE_MIRROR` / `GO_MIRROR`。可用源：
    - Node：清华 `https://mirrors.tuna.tsinghua.edu.cn/nodejs-release`、阿里云 `https://mirrors.aliyun.com/nodejs-release`
@@ -94,7 +87,7 @@ docker compose build \
 
 4. **卡在 `npm ci` / `go mod download` / `apt-get update`**——依赖源问题，确认上面的构建参数已传入，或改 Dockerfile 顶部 `ARG` 默认值。
 
-5. **改代码后构建结果没变**——源码来自 GitHub，需要先 `git push`。`ADD` 会按 ETag 判断缓存，分支内容变化时会自动重新下载；若仍命中旧缓存，加 `--no-cache` 重建。
+5. **改代码后构建结果没变**——先确认服务器上 `git pull` 成功、`web/src` 等目录完整。源码取自构建上下文，Docker 按内容哈希判断，源码变了必然重建。若上下文不完整会回退 GitHub，此时需要 `git push` 才有新代码。
 
 6. **一次性构建，不做本地开发**——可在开发机构建好镜像再导出：
    ```
