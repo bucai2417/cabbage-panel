@@ -154,10 +154,11 @@ docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.1 .
 PYTHON_VERSION=3.12 docker compose build
 ```
 
-构建默认使用国内镜像源（npmmirror、goproxy.cn、清华 Debian 源），避免直连境外源卡住。境外网络可覆盖为官方源：
+构建默认使用国内镜像源（npmmirror、goproxy.cn、清华 Debian 源），并内置 `docker.1ms.run` 加速拉取基础镜像，避免直连境外源卡住。境外网络可覆盖为官方源：
 
 ```bash
 docker compose build \
+  --build-arg DOCKER_MIRROR= \
   --build-arg NPM_REGISTRY=https://registry.npmjs.org \
   --build-arg GOPROXY=https://proxy.golang.org,direct \
   --build-arg DEBIAN_MIRROR=http://deb.debian.org/debian \
@@ -168,11 +169,11 @@ docker compose build \
 
 **构建很慢或卡住**时：
 
-构建阶段已用精简镜像（`node:24-alpine`、`golang:1.27-alpine`）并开启依赖层缓存，但拉取基础镜像仍走 Docker Hub。如果 `--progress=plain` 显示某个层停在 `0B / xxMB` 不动，是 Docker Hub 网络问题，改 Dockerfile 无效。可选：
+构建阶段已用精简镜像（`node:24-alpine`、`golang:1.27-alpine`）并开启依赖层缓存，基础镜像默认走 `docker.1ms.run` 加速站。如果 `--progress=plain` 显示某个层停在 `0B / xxMB` 不动，多半是加速站本身不可用，可切换其他加速站或改回官方源：
 
 ```bash
-# 方式一：用镜像加速站前缀（推荐，写进 .env 后长期生效）
-#   .env 里加一行：DOCKER_MIRROR=docker.1ms.run/
+# 方式一：换一个加速站（写进 .env 后长期生效）
+#   .env 里加一行：DOCKER_MIRROR=docker.m.daocloud.io/library/
 docker compose build
 
 # 方式二：给 Docker 配置全局镜像加速
@@ -187,7 +188,7 @@ docker save cabbage-panel:1.0.1 | gzip > cabbage-panel.tar.gz
 gunzip -c cabbage-panel.tar.gz | docker load
 ```
 
-镜像加速站可在 `.env` 的 `DOCKER_MIRROR` 中切换，例如 `docker.1ms.run/`、`docker.m.daocloud.io/library/`。
+镜像加速站可在 `.env` 的 `DOCKER_MIRROR` 中切换，例如 `docker.1ms.run/`、`docker.m.daocloud.io/library/`；注释掉则用内置默认值，显式设为空值则直连 Docker Hub。
 
 卡在 `npm ci` / `go mod download` / `apt-get` 则是依赖源问题，确认构建参数已生效。
 

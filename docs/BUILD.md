@@ -40,12 +40,13 @@ Dockerfile 默认使用国内依赖源，避免构建阶段直连境外卡住：
 | 前端 `npm ci` | `https://registry.npmmirror.com` | `NPM_REGISTRY` |
 | 后端 `go mod download` | `https://goproxy.cn,direct` | `GOPROXY` |
 | 运行时 `apt-get` | 清华 Debian 源 | `DEBIAN_MIRROR` / `DEBIAN_SECURITY_MIRROR` |
-| 基础镜像 | Docker Hub 官方名 | `DOCKER_MIRROR` |
+| 基础镜像 | `docker.1ms.run/` 加速站 | `DOCKER_MIRROR`（留空 = Docker Hub 官方名） |
 
 境外网络可覆盖为官方源：
 
 ```
 docker compose build \
+  --build-arg DOCKER_MIRROR= \
   --build-arg NPM_REGISTRY=https://registry.npmjs.org \
   --build-arg GOPROXY=https://proxy.golang.org,direct \
   --build-arg DEBIAN_MIRROR=http://deb.debian.org/debian \
@@ -58,12 +59,12 @@ docker compose build \
 
 如果仍然很慢，先 `docker compose build --progress=plain` 看卡在哪：
 
-1. **卡在拉取基础镜像**（`FROM ...` 行，显示 `0B / 51.10MB` 这类不动的下载）——这是 Docker Hub 网络问题，改 Dockerfile 无效。三种办法：
-   - 在 `.env` 里设 `DOCKER_MIRROR=docker.1ms.run/`（仓库自带 `.env.example` 模板），之后 `docker compose build` 长期走加速站。
+1. **卡在拉取基础镜像**（`FROM ...` 行，显示 `0B / 51.10MB` 这类不动的下载）——基础镜像默认已走 `docker.1ms.run` 加速站，若这个站也不可用，换站或改回官方源：
+   - 在 `.env` 里设 `DOCKER_MIRROR=docker.m.daocloud.io/library/`（仓库自带 `.env.example` 模板），之后 `docker compose build` 长期生效；设 `DOCKER_MIRROR=` 空值则直连 Docker Hub。
    - 给 Docker 配全局镜像加速：Docker Desktop → Settings → Docker Engine 加 `"registry-mirrors": ["https://docker.1ms.run"]`，或在 Linux 的 `/etc/docker/daemon.json` 加同样配置后 `systemctl restart docker`。
    - 用 `DOCKER_MIRROR` 临时改镜像前缀：
      ```
-     DOCKER_MIRROR=docker.1ms.run/ docker compose build
+     DOCKER_MIRROR=docker.m.daocloud.io/library/ docker compose build
      ```
    - 先在能联网的机器 `docker pull` 后 `docker save`，拷到服务器 `docker load`。
 

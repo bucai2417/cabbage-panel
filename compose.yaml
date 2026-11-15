@@ -5,9 +5,12 @@ services:
       args:
         # 可用环境变量覆盖：PYTHON_VERSION=3.11 docker compose build
         PYTHON_VERSION: ${PYTHON_VERSION:-3.10}
-        # 基础镜像仓库前缀。国内拉取 Docker Hub 很慢时设为加速站，例如：
-        #   DOCKER_MIRROR=docker.m.daocloud.io/library/
-        DOCKER_MIRROR: ${DOCKER_MIRROR:-}
+        # 基础镜像仓库前缀，默认已内置 1ms 加速站，国内可直接构建。
+        # 境外网络或想换站时覆盖，例如：
+        #   DOCKER_MIRROR=docker.m.daocloud.io/library/ docker compose build
+        #   DOCKER_MIRROR= docker compose build   # 空值 = 直连 Docker Hub
+        # 注意用 ${VAR-默认}（无冒号）：只有未设置才回落默认，显式空值保留。
+        DOCKER_MIRROR: ${DOCKER_MIRROR-docker.1ms.run/}
         # 构建依赖源默认走国内；境外网络可在 .env 或命令行覆盖为官方源。
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
         GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}

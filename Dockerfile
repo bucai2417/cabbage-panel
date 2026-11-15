@@ -1,10 +1,11 @@
 # 运行时可选择 Python 版本：docker build --build-arg PYTHON_VERSION=3.11 .
 ARG PYTHON_VERSION=3.10
 
-# 可选镜像仓库前缀，国内可指向加速站，例如：
-#   docker compose build --build-arg DOCKER_MIRROR=docker.m.daocloud.io/library/
-# 留空使用 Docker Hub 官方镜像名。
-ARG DOCKER_MIRROR=
+# 基础镜像仓库前缀，默认已内置 1ms 加速站，国内可直接构建。
+# 境外网络或想换站时覆盖：
+#   docker build --build-arg DOCKER_MIRROR=docker.m.daocloud.io/library/ .
+#   docker build --build-arg DOCKER_MIRROR= .   # 空值 = 直连 Docker Hub
+ARG DOCKER_MIRROR=docker.1ms.run/
 
 # 构建阶段默认走国内依赖源，避免 npm/go/apt 直连境外卡住。
 ARG NPM_REGISTRY=https://registry.npmmirror.com
