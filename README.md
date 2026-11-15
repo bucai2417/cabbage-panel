@@ -144,7 +144,13 @@ docker compose up -d --build
 docker compose logs cabbage
 ```
 
-镜像包含 Python、Node.js、Bash、Git、pip、npm，**开箱即用、无需额外安装运行时**。数据使用命名卷，默认使用非 root 用户。Python / Node 依赖可在面板安装；系统包在自定义 Dockerfile 预装，默认容器和 systemd 服务不提权安装系统包。
+镜像包含 Python、Node.js、Bash、Git、pip、npm，**开箱即用、无需额外安装运行时**。数据默认放在项目目录下的 `./data`（bind mount），不在 Docker 自己的 volumes 目录里，备份和迁移都方便。想换位置就设 `CABBAGE_DATA`：
+
+```bash
+CABBAGE_DATA=/opt/cabbage/data docker compose up -d
+```
+
+容器以 root 启动，自动修正数据目录属主后降权到 uid 5700 运行，宿主机目录无需手动 `chown`。Python / Node 依赖可在面板安装；系统包在自定义 Dockerfile 预装，默认容器和 systemd 服务不提权安装系统包。
 
 镜像默认 Python 3.10，可在构建时切换版本：
 

@@ -107,6 +107,33 @@ docker compose build \
 
 原生部署（非 Docker）可在面板「系统设置 → 常规设置 → 运行环境」指定 Python 解释器路径或版本号，切换后点「重建 Python 环境」。
 
+### Docker 数据目录
+
+默认用 bind mount 把数据放在项目目录下的 `./data`，而不是 Docker 的命名卷目录（`/var/lib/docker/volumes/...`）。命名卷的路径由 Docker 自己管理，跟项目位置无关，备份和迁移都不方便。
+
+换位置用 `CABBAGE_DATA`：
+
+```bash
+CABBAGE_DATA=/opt/cabbage/data docker compose up -d
+```
+
+容器以 root 启动，入口脚本（`deploy/docker-entrypoint.sh`）会检查 `/app/data` 的属主，不是 `5700:5700` 时自动修正，然后用 `gosu` 降权到 `cabbage` 用户运行。所以宿主机目录不需要手动 `chown`。若宿主机文件系统不支持 chown（如某些网络文件系统），脚本会打印警告，此时需要手动保证目录可写。
+
+从旧的命名卷迁移数据：
+
+```bash
+# 1. 把旧命名卷内容复制到新目录
+docker run --rm -v <旧卷名>:/from -v "$PWD/data":/to alpine \
+  sh -c 'cp -a /from/. /to/'
+# 2. 删除旧容器和卷（确认数据已复制）
+docker compose down
+docker volume rm <旧卷名>
+# 3. 用新配置启动
+docker compose up -d
+```
+
+`docker compose down -v` 只会删除命名卷，对 bind mount 的 `./data` 无效——迁移后不需要它。
+
 ## Windows 构建
 
 先确认目标程序没有被运行中的服务占用。默认构建会写入 dist/cabbage-windows-amd64.exe；本机现有服务可能正使用此文件。需要并行开发时使用 [独立开发程序](DEVELOPMENT.md#独立开发程序)，或在另一个源码目录构建。

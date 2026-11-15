@@ -31,12 +31,13 @@ services:
     ports:
       - "5700:5700"
     volumes:
-      - cabbage-data:/app/data
+      # 数据直接放在项目目录下，而不是 Docker 自己的 volumes 目录。
+      # 用 ${CABBAGE_DATA:-./data} 可覆盖为绝对路径，例如 /opt/cabbage/data。
+      # 容器以 root 启动并自动修正属主后降权运行，宿主机目录无需手动 chown。
+      - ${CABBAGE_DATA:-./data}:/app/data
     environment:
       TZ: Asia/Shanghai
     restart: unless-stopped
     stop_grace_period: 30s
     security_opt:
       - no-new-privileges:true
-volumes:
-  cabbage-data:

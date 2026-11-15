@@ -47,7 +47,7 @@ RUN if [ -n "$DEBIAN_MIRROR" ]; then \
         /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
     fi \
     && apt-get update && apt-get install -y --no-install-recommends \
-        bash git ca-certificates tzdata tini curl tar \
+        bash git ca-certificates tzdata tini curl tar gosu \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 5700 cabbage && useradd --uid 5700 --gid 5700 --create-home cabbage \
     && mkdir -p /app/data && chown cabbage:cabbage /app/data
@@ -132,12 +132,13 @@ RUN set -eux; \
 FROM base AS runtime
 COPY --from=frontend /opt/node /opt/node
 COPY --from=backend /cabbage /usr/local/bin/cabbage
+# 入口脚本：bind mount 的数据目录属主通常是宿主机用户，不一定是 uid 5700。
+# 以 root 启动，修正属主后降权到 cabbage 运行，避免数据目录不可写。
+COPY --chmod=0755 deploy/docker-entrypoint.sh /usr/local/bin/entrypoint.sh
 WORKDIR /app
 ENV TZ=Asia/Shanghai PYTHONUTF8=1 PYTHONIOENCODING=utf-8
-USER cabbage
-VOLUME ["/app/data"]
 EXPOSE 5700
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD curl --fail --silent http://127.0.0.1:5700/healthz || exit 1
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/cabbage"]
-CMD ["--data", "/app/data", "--addr", ":5700"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["/usr/local/bin/cabbage", "--data", "/app/data", "--addr", ":5700"]
