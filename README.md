@@ -166,11 +166,27 @@ docker compose build \
 
 也可以在 `.env` 中设置同名变量后 `docker compose build`。
 
-**构建卡住数小时**多半是拉取基础镜像或依赖时网络超时。排查顺序：
+**构建很慢或卡住**时：
 
-1. 基础镜像 `node:24-bookworm-slim`、`golang:1.27-bookworm`、`python:3.10-slim-bookworm` 从 Docker Hub 拉取，给 Docker 配置镜像加速（Docker Desktop → Settings → Docker Engine 加 `registry-mirrors`）。
-2. 如果卡在 `npm ci` / `go mod download` / `apt-get`，检查上面的构建参数是否生效；可在 `docker compose build` 输出中看到具体卡在哪一步。
-3. 用 `docker compose build --progress=plain` 查看详细构建日志，定位具体阶段。
+构建阶段已用精简镜像（`node:24-alpine`、`golang:1.27-alpine`）并开启依赖层缓存，但拉取基础镜像仍走 Docker Hub。如果 `--progress=plain` 显示某个层停在 `0B / xxMB` 不动，是 Docker Hub 网络问题，改 Dockerfile 无效。可选：
+
+```bash
+# 方式一：用镜像加速站前缀（推荐，一条命令解决）
+DOCKER_MIRROR=docker.m.daocloud.io/library/ docker compose build
+
+# 方式二：给 Docker 配置全局镜像加速
+#   Docker Desktop → Settings → Docker Engine 加：
+#   "registry-mirrors": ["https://docker.m.daocloud.io"]
+#   Linux 改 /etc/docker/daemon.json 后 systemctl restart docker
+
+# 方式三：在能联网的机器构建并导出镜像
+docker build -t cabbage-panel:1.0.1 .
+docker save cabbage-panel:1.0.1 | gzip > cabbage-panel.tar.gz
+# 服务器上
+gunzip -c cabbage-panel.tar.gz | docker load
+```
+
+卡在 `npm ci` / `go mod download` / `apt-get` 则是依赖源问题，确认构建参数已生效。
 
 容器通过更新镜像并重新创建容器升级。面板内程序替换用于原生发行包。不要挂载 Docker socket。
 

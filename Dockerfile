@@ -1,14 +1,19 @@
 # 运行时可选择 Python 版本：docker build --build-arg PYTHON_VERSION=3.11 .
 ARG PYTHON_VERSION=3.10
 
-# 构建阶段默认走国内镜像，避免直连境外源卡住。境外网络可覆盖为空串使用官方源。
-#   docker compose build --build-arg NPM_REGISTRY=https://registry.npmjs.org
+# 可选镜像仓库前缀，国内可指向加速站，例如：
+#   docker compose build --build-arg DOCKER_MIRROR=docker.m.daocloud.io/library/
+# 留空使用 Docker Hub 官方镜像名。
+ARG DOCKER_MIRROR=
+
+# 构建阶段默认走国内依赖源，避免 npm/go/apt 直连境外卡住。
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG GOPROXY=https://goproxy.cn,direct
 ARG DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
 ARG DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security
 
-FROM node:24-bookworm-slim AS frontend
+# 前端构建用 alpine 版 node，体积远小于 bookworm；产物是静态文件，与运行时 libc 无关。
+FROM ${DOCKER_MIRROR}node:24-alpine AS frontend
 ARG NPM_REGISTRY
 WORKDIR /source/web
 COPY web/package*.json ./
@@ -17,11 +22,12 @@ RUN npm config set registry "$NPM_REGISTRY" \
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.27-bookworm AS backend
+# 后端构建用 alpine 版 golang（约 250MB，bookworm 版约 800MB）。
+# CGO_ENABLED=0 + 纯 Go 的 modernc.org/sqlite，产物是静态二进制，可跨 libc 运行。
+FROM ${DOCKER_MIRROR}golang:1.27-alpine AS backend
 ARG GOPROXY
-# go.sum 仍校验每个模块的哈希；GOSUMDB 关闭只跳过 sumdb 在线查询，
-# 避免国内访问 sum.golang.org 超时。如需在线校验可覆盖 GOSUMDB。
-ENV GOPROXY=${GOPROXY} GOSUMDB=off
+# go.sum 仍校验每个模块哈希；GOSUMDB 关闭只跳过 sumdb 在线查询，避免国内超时。
+ENV GOPROXY=${GOPROXY} GOSUMDB=off CGO_ENABLED=0
 WORKDIR /source
 COPY go.mod go.sum ./
 RUN go mod download
@@ -31,12 +37,12 @@ ARG VERSION=1.0.1
 ARG COMMIT=dev
 ARG CABBAGE_UPDATE_PUBLIC_KEY=""
 RUN KEY="${CABBAGE_UPDATE_PUBLIC_KEY:-$(tr -d '\r\n' < update-public-key.txt 2>/dev/null)}" && \
-    CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.updateKey=$KEY" -o /cabbage ./cmd/cabbage
+    go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.updateKey=$KEY" -o /cabbage ./cmd/cabbage
 
-# 官方 python 镜像自带 pip 与 venv，Node 从 node 镜像复制进来（同为 bookworm，glibc 一致）。
-FROM node:24-bookworm-slim AS node-runtime
+# 运行时需要 glibc 兼容的 node 二进制，复用 bookworm-slim 的 node（与 python 基底同为 glibc）。
+FROM ${DOCKER_MIRROR}node:24-bookworm-slim AS node-runtime
 
-FROM python:${PYTHON_VERSION}-slim-bookworm
+FROM ${DOCKER_MIRROR}python:${PYTHON_VERSION}-slim-bookworm
 ARG DEBIAN_MIRROR
 ARG DEBIAN_SECURITY_MIRROR
 # 替换 Debian 源为国内镜像（默认清华），再安装运行时依赖，避免 apt-get 直连境外卡住。

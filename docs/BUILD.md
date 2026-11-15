@@ -33,13 +33,14 @@ PYTHON_VERSION=3.12 docker compose build
 
 ### Docker 构建镜像源
 
-Dockerfile 默认使用国内镜像源，避免构建阶段直连境外源卡住：
+Dockerfile 默认使用国内依赖源，避免构建阶段直连境外卡住：
 
 | 阶段 | 默认源 | 覆盖参数 |
 | --- | --- | --- |
 | 前端 `npm ci` | `https://registry.npmmirror.com` | `NPM_REGISTRY` |
 | 后端 `go mod download` | `https://goproxy.cn,direct` | `GOPROXY` |
 | 运行时 `apt-get` | 清华 Debian 源 | `DEBIAN_MIRROR` / `DEBIAN_SECURITY_MIRROR` |
+| 基础镜像 | Docker Hub 官方名 | `DOCKER_MIRROR` |
 
 境外网络可覆盖为官方源：
 
@@ -51,10 +52,31 @@ docker compose build \
   --build-arg DEBIAN_SECURITY_MIRROR=http://security.debian.org/debian-security
 ```
 
-**构建卡住很久**时，先用 `docker compose build --progress=plain` 查看卡在哪一步：
+### 构建慢或卡住
 
-- 卡在 `FROM node:24...` / `golang:1.27...` / `python:...`：基础镜像从 Docker Hub 拉取超时，给 Docker 配置 `registry-mirrors`（Docker Desktop → Settings → Docker Engine）。
-- 卡在 `npm ci` / `go mod download` / `apt-get update`：确认上面的构建参数已传入，或手动改 Dockerfile 顶部的 `ARG` 默认值。
+**构建阶段镜像已尽量精简**：前端用 `node:24-alpine`，后端用 `golang:1.27-alpine`（约 250MB，bookworm 版约 800MB），产物 `CGO_ENABLED=0` 静态二进制。运行时仍需 glibc，所以最终镜像基于 `python:slim-bookworm`。
+
+如果仍然很慢，先 `docker compose build --progress=plain` 看卡在哪：
+
+1. **卡在拉取基础镜像**（`FROM ...` 行，显示 `0B / 51.10MB` 这类不动的下载）——这是 Docker Hub 网络问题，改 Dockerfile 无效。三种办法：
+   - 给 Docker 配镜像加速：Docker Desktop → Settings → Docker Engine 加 `"registry-mirrors": ["https://docker.m.daocloud.io"]`，或在 Linux 的 `/etc/docker/daemon.json` 加同样配置后 `systemctl restart docker`。
+   - 用 `DOCKER_MIRROR` 直接改镜像前缀：
+     ```
+     DOCKER_MIRROR=docker.m.daocloud.io/library/ docker compose build
+     ```
+   - 先在能联网的机器 `docker pull` 后 `docker save`，拷到服务器 `docker load`。
+
+2. **卡在 `npm ci` / `go mod download` / `apt-get update`**——依赖源问题，确认上面的构建参数已传入，或改 Dockerfile 顶部 `ARG` 默认值。
+
+3. **每次改代码都重新下载依赖**——构建缓存被 `COPY . .` 打断。Dockerfile 已把 `COPY go.mod go.sum` 和 `COPY web/package*.json` 放在源码复制之前，只要依赖清单不变就会命中缓存。若清过缓存，首次构建会重新下载，之后会快。
+
+4. **一次性构建，不做本地开发**——可在开发机构建好镜像再导出：
+   ```
+   docker build -t cabbage-panel:1.0.1 .
+   docker save cabbage-panel:1.0.1 | gzip > cabbage-panel.tar.gz
+   # 服务器上
+   gunzip -c cabbage-panel.tar.gz | docker load
+   ```
 
 原生部署（非 Docker）可在面板「系统设置 → 常规设置 → 运行环境」指定 Python 解释器路径或版本号，切换后点「重建 Python 环境」。
 
