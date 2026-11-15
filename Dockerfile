@@ -59,7 +59,6 @@ FROM base AS source
 ARG SOURCE_REPO=bucai2417/cabbage-panel
 ARG SOURCE_REF=main
 ARG SOURCE_MIRROR=https://codeload.github.com
-ARG GIT_MIRROR=https://github.com
 COPY . /src
 RUN set -eux; \
     check() { \
@@ -74,15 +73,14 @@ RUN set -eux; \
       echo "源码来自构建上下文，文件数: $(find /src -type f | wc -l)"; \
     else \
       echo "构建上下文源码不完整，改为从 GitHub 下载"; \
-      commit="$(git ls-remote "$GIT_MIRROR/$SOURCE_REPO.git" "refs/heads/$SOURCE_REF" | cut -f1)"; \
-      if [ -z "$commit" ]; then \
-        commit="$(git ls-remote "$GIT_MIRROR/$SOURCE_REPO.git" "refs/tags/$SOURCE_REF^{}" | cut -f1)"; \
-      fi; \
-      if [ -z "$commit" ]; then echo "FATAL: 无法解析 $SOURCE_REF 的提交" >&2; exit 1; fi; \
-      echo "提交: $commit"; \
-      url="$SOURCE_MIRROR/$SOURCE_REPO/tar.gz/$commit"; \
-      echo "下载源码: $url"; \
-      curl -fsSL --retry 3 --retry-delay 2 "$url" -o /tmp/src.tar.gz; \
+      missing=""; \
+      for f in go.mod cmd/cabbage/main.go internal/panel/app.go \
+               web/src/App.vue web/src/components/Icon.vue; do \
+        [ -f "/src/$f" ] || missing="$missing $f"; \
+      done; \
+      echo "缺失:$missing"; \
+      curl --http1.1 -fsSL --retry 3 --retry-delay 2 \
+        "$SOURCE_MIRROR/$SOURCE_REPO/tar.gz/refs/heads/$SOURCE_REF" -o /tmp/src.tar.gz; \
       rm -rf /src; mkdir -p /src; \
       tar -xzf /tmp/src.tar.gz -C /src --strip-components=1; \
       rm /tmp/src.tar.gz; \
