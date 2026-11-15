@@ -89,15 +89,23 @@ func New(root, version, commit, updateKey string) (*App, error) {
 		keyPath := filepath.Join(absolute, "setup.key")
 		key, _ := os.ReadFile(keyPath)
 		app.setupKey = strings.TrimSpace(string(key))
+		created := false
 		if app.setupKey == "" {
 			app.setupKey = randomToken()
 			if err := os.WriteFile(keyPath, []byte(app.setupKey), 0600); err != nil {
 				store.close()
 				return nil, err
 			}
+			created = true
 		}
-		// 不把首次设置密钥写入日志，避免日志被读取后直接接管未初始化实例。
-		log.Printf("首次设置密钥已写入 %s，请打开该文件查看", keyPath)
+		// 首次生成时打印密钥本身，容器环境下 docker compose logs 即可直接看到；
+		// 已存在则只提示路径，避免重启时把旧密钥反复刷进日志。
+		if created {
+			log.Printf("首次设置密钥: %s", app.setupKey)
+			log.Printf("该密钥同时写入 %s，初始化管理员后自动删除", keyPath)
+		} else {
+			log.Printf("首次设置密钥已存在，请打开 %s 查看", keyPath)
+		}
 	}
 	_, _ = store.db.Exec("UPDATE runs SET status='interrupted',finished=? WHERE status IN ('running','queued')", now())
 	_, _ = store.db.Exec("DELETE FROM sessions WHERE expires>0 AND expires<?", time.Now().Unix())
@@ -144,15 +152,17 @@ func (app *App) Serve(ctx context.Context, addr string) error {
 		return err
 	}
 	host, port, _ := net.SplitHostPort(listener.Addr().String())
+	display := net.JoinHostPort(host, port)
 	if host == "" || host == "::" || host == "0.0.0.0" {
 		host = "127.0.0.1"
+		display = "localhost:" + port
 	}
 	app.helperMu.Lock()
 	app.helperAddress = "http://" + net.JoinHostPort(host, port) + "/api/notifications/send"
 	app.helperMu.Unlock()
-	log.Printf("大白菜面板 v%s 已启动 http://localhost%s，MCP: /mcp，数据目录: %s", app.version, addr, app.root)
+	log.Printf("大白菜面板 v%s 已启动 http://%s，MCP: /mcp，数据目录: %s", app.version, display, app.root)
 	app.pruneSystemLog()
-	app.appendSystemLog("info", "[boot] 大白菜面板 v"+app.version+" 已启动 http://localhost"+addr)
+	app.appendSystemLog("info", "[boot] 大白菜面板 v"+app.version+" 已启动 http://"+display)
 	app.reportMissingRuntimes()
 	finished := make(chan struct{})
 	go func() {

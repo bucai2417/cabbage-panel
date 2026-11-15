@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -526,5 +527,50 @@ func TestTaskHelperBootstrapsBash(test *testing.T) {
 		if !strings.Contains(string(output), "task helper ok") {
 			test.Fatalf("%s task helper output mismatch: %s", shell, output)
 		}
+	}
+}
+
+func TestSetupKeyLoggedOnFirstBootOnly(test *testing.T) {
+	root := test.TempDir()
+
+	captureLog := func(run func()) string {
+		var buffer bytes.Buffer
+		previous := log.Writer()
+		log.SetOutput(&buffer)
+		defer log.SetOutput(previous)
+		run()
+		return buffer.String()
+	}
+
+	var firstKey string
+	firstLog := captureLog(func() {
+		app, err := New(root, "1.0.0", "test", "")
+		if err != nil {
+			test.Fatal(err)
+		}
+		firstKey = app.setupKey
+		app.Close()
+	})
+	if firstKey == "" {
+		test.Fatal("首次启动未生成设置密钥")
+	}
+	// 首次启动应把密钥本身打进日志，方便容器环境直接从 docker logs 读取。
+	if !strings.Contains(firstLog, firstKey) {
+		test.Fatalf("首次启动日志未包含密钥，实际输出: %s", firstLog)
+	}
+
+	// 仍无管理员时重启，不应重复打印密钥，只提示路径。
+	secondLog := captureLog(func() {
+		app, err := New(root, "1.0.0", "test", "")
+		if err != nil {
+			test.Fatal(err)
+		}
+		app.Close()
+	})
+	if strings.Contains(secondLog, firstKey) {
+		test.Fatal("重启时重复打印了设置密钥")
+	}
+	if !strings.Contains(secondLog, "setup.key") {
+		test.Fatalf("重启时未提示 setup.key 路径，实际输出: %s", secondLog)
 	}
 }
