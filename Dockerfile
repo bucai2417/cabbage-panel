@@ -57,28 +57,29 @@ RUN set -eux; \
     node --version; npm --version; \
     npm config set registry "$NPM_REGISTRY"
 WORKDIR /source/web
-COPY web/package*.json ./
+COPY --chmod=0644 web/package*.json ./
 RUN npm ci --no-audit --no-fund
-COPY web/ ./
-# 构建上下文不完整时明确报错。缺子目录时 vite 只会报
-# "Could not resolve ./components/X.vue"，容易被误判成代码问题。
+# 分步复制前端源码：源目录缺失时 COPY 会直接失败，比 vite 报
+# "Could not resolve ./components/X.vue" 更容易定位。--chmod 顺便统一权限，
+# 避免 Windows 上映射成 0000 造成干扰。
+COPY --chmod=0755 web/src ./src
+COPY --chmod=0755 web/public ./public
+COPY --chmod=0644 web/index.html web/vite.config.js ./
 RUN set -eux; \
-    missing=""; \
-    for f in src/App.vue src/main.js src/components/Icon.vue src/pages/Dashboard.vue; do \
-      [ -f "$f" ] || missing="$missing $f"; \
+    for f in src/App.vue src/components/Icon.vue src/pages/Dashboard.vue; do \
+      if [ ! -f "$f" ]; then \
+        echo "" >&2; \
+        echo "FATAL: 构建上下文缺少 $f" >&2; \
+        echo "src 实际内容：" >&2; ls -la src >&2 || true; \
+        echo "" >&2; \
+        echo "说明构建机上的源码树不完整，不是代码问题。修复办法：" >&2; \
+        echo "  git ls-files web/src/components | head    # 为空说明仓库里没有" >&2; \
+        echo "  git checkout HEAD -- web/src/components    # 从仓库恢复" >&2; \
+        echo "或改用 git 归档作为构建上下文（最可靠）：" >&2; \
+        echo "  git archive HEAD | docker build -t cabbage-panel:1.0.1 -" >&2; \
+        exit 1; \
+      fi; \
     done; \
-    if [ -n "$missing" ]; then \
-      echo "" >&2; \
-      echo "=== 构建上下文缺少文件:$missing ===" >&2; \
-      echo "--- src 下实际内容 ---" >&2; \
-      find src -maxdepth 2 -print 2>/dev/null | sort >&2 || true; \
-      echo "--- 大小写检查（Windows 不敏感、Linux 敏感）---" >&2; \
-      find . -maxdepth 3 \( -iname 'components' -o -iname 'pages' \) -print >&2 || true; \
-      echo "--- web/ 顶层 ---" >&2; \
-      ls -la . >&2 || true; \
-      echo "=== 请在构建机上确认 web/src 完整；必要时重新 git clone ===" >&2; \
-      exit 1; \
-    fi; \
     npm run build
 
 # 后端构建：下载 Go 二进制。CGO_ENABLED=0 + 纯 Go 的 modernc.org/sqlite，
