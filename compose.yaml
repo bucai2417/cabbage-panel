@@ -36,10 +36,10 @@ services:
       - ./data:/app/data
     environment:
       TZ: Asia/Shanghai
-      # 运行身份。默认 5700:5700；群晖等 ACL 环境下设为宿主机数据目录属主，
-      # 例如 PUID=1000 PGID=100，可避免回退到 root 运行。
-      PUID: ${PUID:-5700}
-      PGID: ${PGID:-5700}
+      # 运行身份全自动：入口脚本读取数据目录的宿主机属主并据此运行，无需配置。
+      # 只有想强制指定时才在 .env 里设 PUID/PGID（留空即自动）。
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
     restart: unless-stopped
     stop_grace_period: 30s
     security_opt:

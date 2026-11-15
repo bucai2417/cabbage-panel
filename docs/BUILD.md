@@ -113,37 +113,40 @@ docker compose build \
 
 要换位置就改 `compose.yaml` 的 `volumes` 为绝对路径，例如 `- /opt/cabbage/data:/app/data`。
 
-### 数据目录权限
+### 数据目录权限（全自动）
 
-容器以 root 启动，入口脚本（`deploy/docker-entrypoint.sh`）负责确保 `/app/data` 可写，然后降权运行：
+容器以 root 启动，入口脚本（`deploy/docker-entrypoint.sh`）自动确定运行身份，**不需要任何手动配置**。
 
-1. 属主不是 `PUID:PGID`（默认 `5700:5700`）时执行 `chown -R`。
-2. **真实探测写入**——以目标 uid 尝试创建文件。ACL 环境下 `chown` 成功不代表能写。
-3. 探测通过则以该 uid 运行；失败则打印警告并以 root 运行，保证服务能起来。
+原理：bind mount 保留宿主机的 uid/gid，容器内 `stat /app/data` 得到的就是宿主机上该目录的真实属主。脚本按以下顺序挑候选身份，逐个**真实探测写入**（ACL 环境下 `chown` 成功不代表能写），第一个能写的就用：
 
-群晖、启用 Windows ACL 的共享文件夹、NFS/SMB 挂载都可能出现「`chown` 成功但写不进去」。日志会提示：
+1. `PUID` / `PGID`（用户显式指定时才用）
+2. 数据目录当前属主（迁移过来的数据、自己建的目录）
+3. 父目录属主（docker 自动创建的 `data` 属主是 root，父目录才是真实用户）
+4. `5700:5700`（镜像默认）
+5. root（兜底，保证服务一定能起来）
+
+属主已经匹配时不做任何 `chown`；只有探测失败才尝试修正属主后重测。启动日志会显示最终身份：
 
 ```
-警告: uid 5700 无法写入 /app/data，本次以 root 运行。
+运行身份: 1026:100
 ```
 
-**推荐修法**：把运行身份设成宿主机目录的属主。先查属主：
+群晖、启用 Windows ACL 的共享文件夹、NFS/SMB 挂载都能直接跑通，无需查 uid、无需 `chown`、无需改 ACL。
 
-```bash
-ls -nd /vol1/1000/docker/dbc/data
-# drwxrwxrwx 1 1026 users 4096 ...   ← 第 3、4 列就是 uid/gid
+只有在自动探测全部失败时才回退 root，此时日志会给出提示：
+
+```
+警告: 所有候选身份都无法写入 /app/data，本次以 root 运行。
 ```
 
-然后在 `.env` 里写：
+这时服务仍能正常使用。想恢复非 root，在宿主机执行 `chmod -R u+rwX <数据目录>`，群晖则在 File Station 的「权限」里给该目录授予读写。
+
+如果自动识别不符合预期（例如想固定用某个用户），可在 `.env` 里显式指定：
 
 ```
 PUID=1026
 PGID=100
 ```
-
-重新 `docker compose up -d` 即可。群晖的 `users` 组 gid 通常是 100。
-
-也可以反过来改宿主机：`chown -R 5700:5700 <数据目录>`，并在 File Station 的「权限」里给该 uid 授予读写——但群晖 ACL 界面不认非本地用户，实践中设 `PUID` 更省事。
 
 从旧的命名卷迁移数据：
 
