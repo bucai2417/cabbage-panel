@@ -31,10 +31,9 @@ services:
     ports:
       - "5700:5700"
     volumes:
-      # 数据直接放在项目目录下，而不是 Docker 自己的 volumes 目录。
-      # 用 ${CABBAGE_DATA:-./data} 可覆盖为绝对路径，例如 /opt/cabbage/data。
-      # 容器以 root 启动并自动修正属主后降权运行，宿主机目录无需手动 chown。
-      - ${CABBAGE_DATA:-./data}:/app/data
+      # 相对路径以本文件所在目录为基准，Compose 会解析成该目录下的 data 绝对路径，
+      # 不会落到 /var/lib/docker/volumes。容器启动时自动修正属主后降权运行。
+      - ./data:/app/data
     environment:
       TZ: Asia/Shanghai
     restart: unless-stopped
