@@ -149,10 +149,28 @@ docker compose logs cabbage
 镜像默认 Python 3.10，可在构建时切换版本：
 
 ```bash
-docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.0 .
+docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.1 .
 # 或
 PYTHON_VERSION=3.12 docker compose build
 ```
+
+构建默认使用国内镜像源（npmmirror、goproxy.cn、清华 Debian 源），避免直连境外源卡住。境外网络可覆盖为官方源：
+
+```bash
+docker compose build \
+  --build-arg NPM_REGISTRY=https://registry.npmjs.org \
+  --build-arg GOPROXY=https://proxy.golang.org,direct \
+  --build-arg DEBIAN_MIRROR=http://deb.debian.org/debian \
+  --build-arg DEBIAN_SECURITY_MIRROR=http://security.debian.org/debian-security
+```
+
+也可以在 `.env` 中设置同名变量后 `docker compose build`。
+
+**构建卡住数小时**多半是拉取基础镜像或依赖时网络超时。排查顺序：
+
+1. 基础镜像 `node:24-bookworm-slim`、`golang:1.27-bookworm`、`python:3.10-slim-bookworm` 从 Docker Hub 拉取，给 Docker 配置镜像加速（Docker Desktop → Settings → Docker Engine 加 `registry-mirrors`）。
+2. 如果卡在 `npm ci` / `go mod download` / `apt-get`，检查上面的构建参数是否生效；可在 `docker compose build` 输出中看到具体卡在哪一步。
+3. 用 `docker compose build --progress=plain` 查看详细构建日志，定位具体阶段。
 
 容器通过更新镜像并重新创建容器升级。面板内程序替换用于原生发行包。不要挂载 Docker socket。
 

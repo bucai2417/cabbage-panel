@@ -20,7 +20,7 @@
 运行时镜像基于官方 `python:${PYTHON_VERSION}-slim-bookworm`，Node 从 `node:24-bookworm-slim` 复制进来（同为 bookworm，glibc 一致）。默认 Python 3.10，构建时可切换：
 
 ```
-docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.0 .
+docker build --build-arg PYTHON_VERSION=3.11 -t cabbage-panel:1.0.1 .
 ```
 
 compose 通过环境变量覆盖：
@@ -30,6 +30,31 @@ PYTHON_VERSION=3.12 docker compose build
 ```
 
 说明：Debian bookworm 官方源只有 Python 3.11，因此运行时基底改为官方 python 镜像而非在 node 镜像里 apt 安装。镜像会略大一些，换来 3.10 / 3.11 / 3.12 一行参数切换。
+
+### Docker 构建镜像源
+
+Dockerfile 默认使用国内镜像源，避免构建阶段直连境外源卡住：
+
+| 阶段 | 默认源 | 覆盖参数 |
+| --- | --- | --- |
+| 前端 `npm ci` | `https://registry.npmmirror.com` | `NPM_REGISTRY` |
+| 后端 `go mod download` | `https://goproxy.cn,direct` | `GOPROXY` |
+| 运行时 `apt-get` | 清华 Debian 源 | `DEBIAN_MIRROR` / `DEBIAN_SECURITY_MIRROR` |
+
+境外网络可覆盖为官方源：
+
+```
+docker compose build \
+  --build-arg NPM_REGISTRY=https://registry.npmjs.org \
+  --build-arg GOPROXY=https://proxy.golang.org,direct \
+  --build-arg DEBIAN_MIRROR=http://deb.debian.org/debian \
+  --build-arg DEBIAN_SECURITY_MIRROR=http://security.debian.org/debian-security
+```
+
+**构建卡住很久**时，先用 `docker compose build --progress=plain` 查看卡在哪一步：
+
+- 卡在 `FROM node:24...` / `golang:1.27...` / `python:...`：基础镜像从 Docker Hub 拉取超时，给 Docker 配置 `registry-mirrors`（Docker Desktop → Settings → Docker Engine）。
+- 卡在 `npm ci` / `go mod download` / `apt-get update`：确认上面的构建参数已传入，或手动改 Dockerfile 顶部的 `ARG` 默认值。
 
 原生部署（非 Docker）可在面板「系统设置 → 常规设置 → 运行环境」指定 Python 解释器路径或版本号，切换后点「重建 Python 环境」。
 

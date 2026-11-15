@@ -5,6 +5,11 @@ services:
       args:
         # 可用环境变量覆盖：PYTHON_VERSION=3.11 docker compose build
         PYTHON_VERSION: ${PYTHON_VERSION:-3.10}
+        # 构建镜像源默认走国内；境外网络可在 .env 或命令行覆盖为官方源。
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}
     image: cabbage-panel:1.0.1
     container_name: cabbage-panel
     ports:
