@@ -144,13 +144,9 @@ docker compose up -d --build
 docker compose logs cabbage
 ```
 
-镜像包含 Python、Node.js、Bash、Git、pip、npm，**开箱即用、无需额外安装运行时**。数据默认放在项目目录下的 `./data`（bind mount），不在 Docker 自己的 volumes 目录里，备份和迁移都方便。想换位置就设 `CABBAGE_DATA`：
+镜像包含 Python、Node.js、Bash、Git、pip、npm，**开箱即用、无需额外安装运行时**。数据默认放在项目目录下的 `./data`（bind mount），不在 Docker 自己的 volumes 目录里，备份和迁移都方便。想换位置就改 `compose.yaml` 的 `volumes`。
 
-```bash
-CABBAGE_DATA=/opt/cabbage/data docker compose up -d
-```
-
-容器以 root 启动，自动修正数据目录属主后降权到 uid 5700 运行，宿主机目录无需手动 `chown`。Python / Node 依赖可在面板安装；系统包在自定义 Dockerfile 预装，默认容器和 systemd 服务不提权安装系统包。
+容器以 root 启动，入口脚本自动修正数据目录属主后降权到 uid 5700 运行。群晖等启用 Windows ACL 的共享文件夹下，`chown` 可能不生效，日志会提示「无法写入 /app/data，本次以 root 运行」——此时在 `.env` 里设 `PUID` / `PGID` 为宿主机目录属主即可（`ls -nd <数据目录>` 查看）。详见[构建文档](docs/BUILD.md#数据目录权限)。Python / Node 依赖可在面板安装；系统包在自定义 Dockerfile 预装，默认容器和 systemd 服务不提权安装系统包。
 
 镜像默认 Python 3.10，可在构建时切换版本：
 

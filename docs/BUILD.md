@@ -109,15 +109,41 @@ docker compose build \
 
 ### Docker 数据目录
 
-默认用 bind mount 把数据放在项目目录下的 `./data`，而不是 Docker 的命名卷目录（`/var/lib/docker/volumes/...`）。命名卷的路径由 Docker 自己管理，跟项目位置无关，备份和迁移都不方便。
+默认用 bind mount 把数据放在项目目录下的 `./data`，而不是 Docker 的命名卷目录（`/var/lib/docker/volumes/...`）。命名卷的路径由 Docker 自己管理，跟项目位置无关，备份和迁移都不方便。相对路径以 compose.yaml 所在目录为基准，所以数据始终跟着项目走。
 
-换位置用 `CABBAGE_DATA`：
+要换位置就改 `compose.yaml` 的 `volumes` 为绝对路径，例如 `- /opt/cabbage/data:/app/data`。
 
-```bash
-CABBAGE_DATA=/opt/cabbage/data docker compose up -d
+### 数据目录权限
+
+容器以 root 启动，入口脚本（`deploy/docker-entrypoint.sh`）负责确保 `/app/data` 可写，然后降权运行：
+
+1. 属主不是 `PUID:PGID`（默认 `5700:5700`）时执行 `chown -R`。
+2. **真实探测写入**——以目标 uid 尝试创建文件。ACL 环境下 `chown` 成功不代表能写。
+3. 探测通过则以该 uid 运行；失败则打印警告并以 root 运行，保证服务能起来。
+
+群晖、启用 Windows ACL 的共享文件夹、NFS/SMB 挂载都可能出现「`chown` 成功但写不进去」。日志会提示：
+
+```
+警告: uid 5700 无法写入 /app/data，本次以 root 运行。
 ```
 
-容器以 root 启动，入口脚本（`deploy/docker-entrypoint.sh`）会检查 `/app/data` 的属主，不是 `5700:5700` 时自动修正，然后用 `gosu` 降权到 `cabbage` 用户运行。所以宿主机目录不需要手动 `chown`。若宿主机文件系统不支持 chown（如某些网络文件系统），脚本会打印警告，此时需要手动保证目录可写。
+**推荐修法**：把运行身份设成宿主机目录的属主。先查属主：
+
+```bash
+ls -nd /vol1/1000/docker/dbc/data
+# drwxrwxrwx 1 1026 users 4096 ...   ← 第 3、4 列就是 uid/gid
+```
+
+然后在 `.env` 里写：
+
+```
+PUID=1026
+PGID=100
+```
+
+重新 `docker compose up -d` 即可。群晖的 `users` 组 gid 通常是 100。
+
+也可以反过来改宿主机：`chown -R 5700:5700 <数据目录>`，并在 File Station 的「权限」里给该 uid 授予读写——但群晖 ACL 界面不认非本地用户，实践中设 `PUID` 更省事。
 
 从旧的命名卷迁移数据：
 

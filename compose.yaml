@@ -32,10 +32,14 @@ services:
       - "5700:5700"
     volumes:
       # 相对路径以本文件所在目录为基准，Compose 会解析成该目录下的 data 绝对路径，
-      # 不会落到 /var/lib/docker/volumes。容器启动时自动修正属主后降权运行。
+      # 不会落到 /var/lib/docker/volumes。
       - ./data:/app/data
     environment:
       TZ: Asia/Shanghai
+      # 运行身份。默认 5700:5700；群晖等 ACL 环境下设为宿主机数据目录属主，
+      # 例如 PUID=1000 PGID=100，可避免回退到 root 运行。
+      PUID: ${PUID:-5700}
+      PGID: ${PGID:-5700}
     restart: unless-stopped
     stop_grace_period: 30s
     security_opt:
