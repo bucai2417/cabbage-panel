@@ -164,19 +164,20 @@ docker compose build \
   --build-arg DEBIAN_SECURITY_MIRROR=http://security.debian.org/debian-security
 ```
 
-也可以在 `.env` 中设置同名变量后 `docker compose build`。
+也可以在 `.env` 中设置同名变量后 `docker compose build`（仓库自带 `.env.example` 模板，复制为 `.env` 即可）。
 
 **构建很慢或卡住**时：
 
 构建阶段已用精简镜像（`node:24-alpine`、`golang:1.27-alpine`）并开启依赖层缓存，但拉取基础镜像仍走 Docker Hub。如果 `--progress=plain` 显示某个层停在 `0B / xxMB` 不动，是 Docker Hub 网络问题，改 Dockerfile 无效。可选：
 
 ```bash
-# 方式一：用镜像加速站前缀（推荐，一条命令解决）
-DOCKER_MIRROR=docker.m.daocloud.io/library/ docker compose build
+# 方式一：用镜像加速站前缀（推荐，写进 .env 后长期生效）
+#   .env 里加一行：DOCKER_MIRROR=docker.1ms.run/
+docker compose build
 
 # 方式二：给 Docker 配置全局镜像加速
 #   Docker Desktop → Settings → Docker Engine 加：
-#   "registry-mirrors": ["https://docker.m.daocloud.io"]
+#   "registry-mirrors": ["https://docker.1ms.run"]
 #   Linux 改 /etc/docker/daemon.json 后 systemctl restart docker
 
 # 方式三：在能联网的机器构建并导出镜像
@@ -185,6 +186,8 @@ docker save cabbage-panel:1.0.1 | gzip > cabbage-panel.tar.gz
 # 服务器上
 gunzip -c cabbage-panel.tar.gz | docker load
 ```
+
+镜像加速站可在 `.env` 的 `DOCKER_MIRROR` 中切换，例如 `docker.1ms.run/`、`docker.m.daocloud.io/library/`。
 
 卡在 `npm ci` / `go mod download` / `apt-get` 则是依赖源问题，确认构建参数已生效。
 

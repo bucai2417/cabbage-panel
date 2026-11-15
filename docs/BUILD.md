@@ -59,10 +59,11 @@ docker compose build \
 如果仍然很慢，先 `docker compose build --progress=plain` 看卡在哪：
 
 1. **卡在拉取基础镜像**（`FROM ...` 行，显示 `0B / 51.10MB` 这类不动的下载）——这是 Docker Hub 网络问题，改 Dockerfile 无效。三种办法：
-   - 给 Docker 配镜像加速：Docker Desktop → Settings → Docker Engine 加 `"registry-mirrors": ["https://docker.m.daocloud.io"]`，或在 Linux 的 `/etc/docker/daemon.json` 加同样配置后 `systemctl restart docker`。
-   - 用 `DOCKER_MIRROR` 直接改镜像前缀：
+   - 在 `.env` 里设 `DOCKER_MIRROR=docker.1ms.run/`（仓库自带 `.env.example` 模板），之后 `docker compose build` 长期走加速站。
+   - 给 Docker 配全局镜像加速：Docker Desktop → Settings → Docker Engine 加 `"registry-mirrors": ["https://docker.1ms.run"]`，或在 Linux 的 `/etc/docker/daemon.json` 加同样配置后 `systemctl restart docker`。
+   - 用 `DOCKER_MIRROR` 临时改镜像前缀：
      ```
-     DOCKER_MIRROR=docker.m.daocloud.io/library/ docker compose build
+     DOCKER_MIRROR=docker.1ms.run/ docker compose build
      ```
    - 先在能联网的机器 `docker pull` 后 `docker save`，拷到服务器 `docker load`。
 
