@@ -31,12 +31,30 @@ PYTHON_VERSION=3.12 docker compose build
 
 说明：Debian bookworm 官方源只有 Python 3.11，因此运行时基底改为官方 python 镜像而非在 node 镜像里 apt 安装。镜像会略大一些，换来 3.10 / 3.11 / 3.12 一行参数切换。
 
+### 源码来源
+
+**Docker 构建时从 GitHub 下载完整源码 tarball，不使用构建上下文里的源码。** 因此：
+
+- 服务器上的源码树不完整、缺目录、权限异常都不影响构建。
+- `.dockerignore` 只保留 `Dockerfile`，构建上下文几乎为空，传输最快。
+- 改了本地代码要构建进镜像，必须先 push 到 GitHub。
+
+默认取 `main` 分支，可指定 tag 或 commit：
+
+```
+docker build --build-arg SOURCE_REF=v1.0.1 -t cabbage-panel:1.0.1 .
+SOURCE_REF=v1.0.1 docker compose build
+```
+
+构建阶段会校验 12 个关键文件（`go.mod`、`cmd/cabbage/main.go`、`web/src/components/Icon.vue` 等），缺失时直接报出文件名并退出，不会等到编译阶段才失败。
+
 ### Docker 构建镜像源
 
 Dockerfile 默认使用国内依赖源，避免构建阶段直连境外卡住：
 
 | 阶段 | 默认源 | 覆盖参数 |
 | --- | --- | --- |
+| 源码 tarball | `codeload.github.com` | `SOURCE_MIRROR` / `SOURCE_REPO` / `SOURCE_REF` |
 | Node 构建工具链 | 清华 `nodejs-release` | `NODE_MIRROR` / `NODE_VERSION` |
 | Go 构建工具链 | 阿里云 `golang` | `GO_MIRROR` / `GO_VERSION` |
 | 前端 `npm ci` | `https://registry.npmmirror.com` | `NPM_REGISTRY` |
@@ -49,6 +67,7 @@ Dockerfile 默认使用国内依赖源，避免构建阶段直连境外卡住：
 ```
 docker compose build \
   --build-arg DOCKER_MIRROR= \
+  --build-arg SOURCE_MIRROR=https://codeload.github.com \
   --build-arg NODE_MIRROR=https://nodejs.org/dist \
   --build-arg GO_MIRROR=https://go.dev/dl \
   --build-arg NPM_REGISTRY=https://registry.npmjs.org \
@@ -68,15 +87,17 @@ docker compose build \
    - 给 Docker 配全局镜像加速：Docker Desktop → Settings → Docker Engine 加 `"registry-mirrors": ["https://docker.1ms.run"]`，或在 Linux 的 `/etc/docker/daemon.json` 加同样配置后 `systemctl restart docker`。
    - 先在能联网的机器 `docker pull` 后 `docker save`，拷到服务器 `docker load`。
 
-2. **卡在下载 Node / Go 二进制**——换镜像源，或在 `.env` 里覆盖 `NODE_MIRROR` / `GO_MIRROR`。可用源：
+2. **卡在下载源码 tarball**——`codeload.github.com` 在国内通常可用（约 550KB，5 秒）。不通时用 `SOURCE_MIRROR` 指向代理，或先在能联网的机器构建镜像再 `docker save` / `docker load`。
+
+3. **卡在下载 Node / Go 二进制**——换镜像源，或在 `.env` 里覆盖 `NODE_MIRROR` / `GO_MIRROR`。可用源：
    - Node：清华 `https://mirrors.tuna.tsinghua.edu.cn/nodejs-release`、阿里云 `https://mirrors.aliyun.com/nodejs-release`
    - Go：阿里云 `https://mirrors.aliyun.com/golang`、中科大 `https://mirrors.ustc.edu.cn/golang`
 
-3. **卡在 `npm ci` / `go mod download` / `apt-get update`**——依赖源问题，确认上面的构建参数已传入，或改 Dockerfile 顶部 `ARG` 默认值。
+4. **卡在 `npm ci` / `go mod download` / `apt-get update`**——依赖源问题，确认上面的构建参数已传入，或改 Dockerfile 顶部 `ARG` 默认值。
 
-4. **每次改代码都重新下载依赖**——构建缓存被 `COPY . .` 打断。Dockerfile 已把 `COPY go.mod go.sum` 和 `COPY web/package*.json` 放在源码复制之前，工具链下载也在单独的 `RUN` 层，只要依赖清单和版本不变就会命中缓存。若清过缓存，首次构建会重新下载，之后会快。
+5. **改代码后构建结果没变**——源码来自 GitHub，需要先 `git push`。想用本地未推送的代码构建，改 `SOURCE_REF` 指向对应 commit 并确保已推送。
 
-5. **一次性构建，不做本地开发**——可在开发机构建好镜像再导出：
+6. **一次性构建，不做本地开发**——可在开发机构建好镜像再导出：
    ```
    docker build -t cabbage-panel:1.0.1 .
    docker save cabbage-panel:1.0.1 | gzip > cabbage-panel.tar.gz
