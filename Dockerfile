@@ -71,7 +71,8 @@ RUN set -eux; \
     echo "--- 源码完整性检查 ---"; \
     for f in go.mod go.sum cmd/cabbage/main.go internal/panel/app.go \
              web/package.json web/package-lock.json web/index.html web/vite.config.js \
-             web/src/App.vue web/src/main.js web/src/components/Icon.vue web/src/pages/Dashboard.vue; do \
+             web/src/App.vue web/src/main.js web/src/components/Icon.vue web/src/pages/Dashboard.vue \
+             deploy/docker-entrypoint.sh; do \
       if [ ! -f "/src/$f" ]; then echo "FATAL: 源码缺少 $f" >&2; exit 1; fi; \
     done; \
     echo "源码完整，文件数: $(find /src -type f | wc -l)"
@@ -134,7 +135,8 @@ COPY --from=frontend /opt/node /opt/node
 COPY --from=backend /cabbage /usr/local/bin/cabbage
 # 入口脚本：bind mount 的数据目录属主通常是宿主机用户，不一定是 uid 5700。
 # 以 root 启动，修正属主后降权到 cabbage 运行，避免数据目录不可写。
-COPY --chmod=0755 deploy/docker-entrypoint.sh /usr/local/bin/entrypoint.sh
+# 从 source 阶段取：脚本随源码 tarball 下载，不依赖构建上下文。
+COPY --from=source --chmod=0755 /src/deploy/docker-entrypoint.sh /usr/local/bin/entrypoint.sh
 WORKDIR /app
 ENV TZ=Asia/Shanghai PYTHONUTF8=1 PYTHONIOENCODING=utf-8
 EXPOSE 5700

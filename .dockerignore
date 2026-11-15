@@ -1,5 +1,4 @@
-# 源码由 Dockerfile 内部从 GitHub 下载，构建上下文只需要 Dockerfile 和入口脚本。
-# 排除全部源码与运行数据，避免把不完整的源码树传进构建上下文（也更快）。
+# 源码与入口脚本都由 Dockerfile 内部从 GitHub tarball 获取，
+# 构建上下文只需要 Dockerfile 本身，其余全部排除。
 *
 !Dockerfile
-!deploy/docker-entrypoint.sh
