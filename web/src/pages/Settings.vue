@@ -91,7 +91,7 @@ async function deleteSelectedApps() {
     confirmText: '删除应用',
   })) return
   batchBusy.value = true
-  await action(async () => { await api('/apps', 'DELETE', selectedApps.value); selectedApps.value = []; apps.value = await api('/apps') }, '所选应用已删除')
+  await action(async () => { await api('/apps', 'DELETE', selectedApps.value); selectedApps.value = []; replaceApps(await api('/apps')) }, '所选应用已删除')
   batchBusy.value = false
 }
 async function deleteSelectedBackups() {
@@ -116,7 +116,27 @@ async function changeTab(value) { if (notificationForm.value && !await notificat
 const location = window.location
 const chosenScopes = ref(['crons', 'logs', 'mcp'])
 const mcpConfig = computed(() => JSON.stringify({ mcpServers: { cabbage: { type: 'http', url: location.origin + '/mcp', headers: { Authorization: 'Bearer ' + (mcpToken.value || '<access_token>') } } } }, null, 2))
-async function load() { const results = await Promise.allSettled([api('/system/settings'), api('/system/runtimes'), api('/backups'), api('/apps'), api('/user/login-log'), api('/user'), api('/user/ip-blacklist'), api('/system/alerts')]); const targets = [settings, runtimes, backups, apps, loginLogs]; results.forEach((result, index) => { if (result.status === 'fulfilled') { if (index < targets.length) targets[index].value = result.value; else if (index === 5) account.value.username = result.value.username; else if (index === 6) ipBlacklist.value = result.value; else alerts.value = result.value } else if (index < 5 || index === 7) toast(result.reason.message, 'error') }) }
+// 应用列表变更计数：load() 用它判断结果是否已过期，避免并发慢请求覆盖新数据。
+const appsGeneration = ref(0)
+function replaceApps(list) { appsGeneration.value += 1; apps.value = Array.isArray(list) ? list : [] }
+async function load() {
+  // 记录发起时的版本号，避免慢请求（如运行时检测）返回后用旧数据覆盖新建/删除后的结果。
+  const generation = appsGeneration.value
+  const results = await Promise.allSettled([api('/system/settings'), api('/system/runtimes'), api('/backups'), api('/apps'), api('/user/login-log'), api('/user'), api('/user/ip-blacklist'), api('/system/alerts')])
+  const targets = [settings, runtimes, backups, apps, loginLogs]
+  results.forEach((result, index) => {
+    if (result.status !== 'fulfilled') {
+      if (index < 5 || index === 7) toast(result.reason.message, 'error')
+      return
+    }
+    // 应用列表在加载期间被创建/删除/编辑过时丢弃这次结果。
+    if (index === 3 && appsGeneration.value !== generation) return
+    if (index < targets.length) targets[index].value = result.value
+    else if (index === 5) account.value.username = result.value.username
+    else if (index === 6) ipBlacklist.value = result.value
+    else alerts.value = result.value
+  })
+}
 async function rebuildPython() {
   if (!await confirmDialog({
     tone: 'danger',
@@ -162,9 +182,9 @@ async function createBackup() { saving.value = true; await action(async () => { 
 async function restoreBackup(name) { const item = backups.value.find(entry => entry.name === name); if (!item) return; if (!await confirmDialog({ tone: 'danger', icon: 'DatabaseBackup', eyebrow: '恢复备份', title: '恢复备份「' + name + '」？', message: '备份中的任务、变量、应用、账号和设置会覆盖当前数据。', details: [name], note: '未包含的脚本、配置、日志或运行记录会保持现状；系统会先创建恢复前备份，恢复后需要重新登录。', confirmText: '继续恢复', cancelText: '取消' })) return; importing.value = true; await action(async () => { await api('/backups/restore', 'POST', { name, auto: item.auto === true }); window.dispatchEvent(new Event('session-expired')) }, '恢复成功，请使用备份中的账户重新登录'); importing.value = false }
 async function importBackup(event) { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; if (!await confirmDialog({ tone: 'danger', icon: 'DatabaseBackup', eyebrow: '恢复备份', title: '导入并覆盖当前数据？', message: '任务、变量、脚本、应用和账号都会被备份中的内容替换。', details: [file.name], note: '系统会先创建恢复前备份；恢复后需要重新登录。', confirmText: '继续导入', cancelText: '取消' })) return; importing.value = true; const form = new FormData(); form.append('file', file); await action(async () => { await api('/backups/import', 'POST', form); window.dispatchEvent(new Event('session-expired')) }, '恢复成功，请使用备份中的账户重新登录'); importing.value = false }
 async function deleteBackup(name) { if (!await confirmDelete({ title: '永久删除此备份？', message: '备份 ZIP 会从磁盘移除，之后无法再用它恢复数据。', details: [name], confirmText: '删除备份' })) return; await action(async () => { await api(backupPathByName(name), 'DELETE'); backups.value = await api('/backups') }, '备份已删除') }
-async function saveApp(values) { saving.value = true; try { const result = await api('/apps', values.id ? 'PUT' : 'POST', { ...values, scopes: chosenScopes.value }); modal.value = null; if (result.client_secret) secret.value = result; apps.value = await api('/apps'); toast('应用已保存') } catch (error) { toast(error.message, 'error') } finally { saving.value = false } }
+async function saveApp(values) { saving.value = true; try { const result = await api('/apps', values.id ? 'PUT' : 'POST', { ...values, scopes: chosenScopes.value }); modal.value = null; if (result.client_secret) secret.value = result; replaceApps(await api('/apps')); toast('应用已保存') } catch (error) { toast(error.message, 'error') } finally { saving.value = false } }
 function editApp(item) { chosenScopes.value = item ? [...item.scopes] : ['crons', 'logs', 'mcp']; modal.value = item ? { ...item, expiresAt: (item.expiresAt || '').slice(0, 10) } : { name: '', expiresAt: '' } }
-async function removeApp(item) { if (!await confirmDelete({ title: '删除应用「' + item.name + '」？', message: '应用的全部访问凭证会被撤销，使用这些凭证的客户端将立即失去访问权限。', details: [item.name, item.client_id], note: '此操作不可撤销。', confirmText: '删除应用' })) return; await action(async () => { await api('/apps', 'DELETE', [item.id]); apps.value = await api('/apps') }, '应用已删除') }
+async function removeApp(item) { if (!await confirmDelete({ title: '删除应用「' + item.name + '」？', message: '应用的全部访问凭证会被撤销，使用这些凭证的客户端将立即失去访问权限。', details: [item.name, item.client_id], note: '此操作不可撤销。', confirmText: '删除应用' })) return; await action(async () => { await api('/apps', 'DELETE', [item.id]); replaceApps(await api('/apps')) }, '应用已删除') }
 async function resetSecret(item) { if (!await confirmDialog({ tone: 'warning', icon: 'KeyRound', eyebrow: '重置密钥', title: '重置「' + item.name + '」的密钥？', message: '已有 token 会立即失效，自动化客户端需要使用新密钥重新获取凭证。', details: [item.client_id], confirmText: '重置密钥', cancelText: '取消' })) return; await action(async () => { secret.value = await api('/apps/' + item.id + '/reset-secret', 'PUT') }, '密钥已重置') }
 async function generateMcpToken() {
   const app = mcpApps.value.find(item => item.id === mcpAppId.value)
