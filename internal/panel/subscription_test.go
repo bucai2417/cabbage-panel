@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -236,5 +237,57 @@ func TestFileSubscriptionUpdatesCronFromHeader(test *testing.T) {
 	tasks, _ = panel.app.store.list("crons")
 	if len(tasks) != 1 || integer(tasks[0]["id"]) != taskID || text(tasks[0]["schedule"]) != "0 9 * * *" {
 		test.Fatalf("removing annotation should keep existing task: %v", tasks)
+	}
+}
+
+func TestSubscriptionLogGroupsChanges(test *testing.T) {
+	panel := setupPanel(test)
+	var body atomic.Value
+	body.Store("# cron: 0 8 * * *\nprint('第一版')\n")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(body.Load().(string)))
+	}))
+	defer server.Close()
+
+	item := panel.data(test, "POST", "/api/subscriptions", Object{
+		"name": "分组日志", "type": "file", "url": server.URL + "/daily.py",
+		"alias": "grouped", "schedule": "", "autoAddCron": true,
+	}).(map[string]any)
+	sync := func() string {
+		test.Helper()
+		runs := panel.data(test, "PUT", "/api/subscriptions/run", []int64{integer(item["id"])}).([]any)
+		runID := integer(runs[0].(map[string]any)["runId"])
+		if result := panel.finished(test, runID); result["status"] != "success" {
+			test.Fatalf("同步失败: %v", result)
+		}
+		log, err := os.ReadFile(filepath.Join(panel.app.root, "logs", fmt.Sprintf("%d.log", runID)))
+		if err != nil {
+			test.Fatal(err)
+		}
+		return string(log)
+	}
+
+	// 第一次：新增文件 + 新建任务。
+	first := sync()
+	for _, want := range []string{"新增 1", "更新 0", "未变化 0", "[新增文件 1]", "daily.py", "[新建任务 1]"} {
+		if !strings.Contains(first, want) {
+			test.Fatalf("首次同步日志缺少 %q:\n%s", want, first)
+		}
+	}
+
+	// 内容不变：应显示未变化，不出现新增/更新。
+	second := sync()
+	if !strings.Contains(second, "新增 0") || !strings.Contains(second, "更新 0") || !strings.Contains(second, "未变化 1") {
+		test.Fatalf("未变化同步日志不符:\n%s", second)
+	}
+	if strings.Contains(second, "[更新文件") || strings.Contains(second, "[新增文件") {
+		test.Fatalf("无变化时不应列出文件:\n%s", second)
+	}
+
+	// 内容变化：应显示更新。
+	body.Store("# cron: 0 8 * * *\nprint('第二版')\n")
+	third := sync()
+	if !strings.Contains(third, "更新 1") || !strings.Contains(third, "[更新文件 1]") {
+		test.Fatalf("内容变化日志不符:\n%s", third)
 	}
 }

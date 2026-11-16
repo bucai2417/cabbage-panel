@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -546,17 +547,28 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 		byCommand[text(task["command"])] = task
 		usedNames[text(task["name"])] = true
 	}
+	// 按变化类型分组，最后统一输出，便于看清本次同步到底动了哪些文件。
+	var added, updated, unchanged []string
+	var createdTasks, updatedTasks []string
 	for relative, content := range files {
 		targetName := alias + "/" + relative
 		target, err := safePath(filepath.Join(app.root, "scripts"), targetName)
 		if err != nil {
 			return err
 		}
+		// 写入前先读旧内容判断变化：不存在算新增，内容不同算更新，相同算未变化。
+		switch previous, readErr := readText(target, 4<<20); {
+		case readErr != nil:
+			added = append(added, targetName)
+		case previous != content:
+			updated = append(updated, targetName)
+		default:
+			unchanged = append(unchanged, targetName)
+		}
 		if err := atomicWrite(target, []byte(content)); err != nil {
 			return err
 		}
 		current[targetName] = true
-		fmt.Fprintln(writer, "同步", targetName)
 		if boolean(item["autoAddCron"]) {
 			if spec := scriptHeaderCron(content); spec != "" {
 				command := "task " + shellQuote(targetName)
@@ -577,11 +589,9 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 							return err
 						}
 						byCommand[command] = saved
-						if text(existing["schedule"]) != spec {
-							fmt.Fprintf(writer, "更新任务计划 %s（%s）\n", taskName, spec)
+						if text(existing["schedule"]) != spec || text(existing["name"]) != taskName {
+							updatedTasks = append(updatedTasks, fmt.Sprintf("%s（%s）", taskName, spec))
 						}
-					} else {
-						fmt.Fprintf(writer, "任务已存在，跳过自动创建：%s\n", command)
 					}
 				} else {
 					taskName = uniqueTaskName(taskName, usedNames)
@@ -591,11 +601,12 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 						return err
 					}
 					byCommand[command] = saved
-					fmt.Fprintf(writer, "自动创建任务 %s（%s）\n", taskName, spec)
+					createdTasks = append(createdTasks, fmt.Sprintf("%s（%s）", taskName, spec))
 				}
 			}
 		}
 	}
+	var removed []string
 	if boolean(item["autoDelCron"]) {
 		if previous, valid := item["files"].([]any); valid {
 			for _, value := range previous {
@@ -603,6 +614,7 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 				if !current[relative] && strings.HasPrefix(relative, alias+"/") {
 					if target, err := safePath(filepath.Join(app.root, "scripts"), relative); err == nil {
 						_ = os.Remove(target)
+						removed = append(removed, relative)
 					}
 				}
 			}
@@ -624,6 +636,7 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 			}
 		}
 	}
+	writeSyncSummary(writer, added, updated, unchanged, removed, createdTasks, updatedTasks)
 	names := []string{}
 	for name := range current {
 		names = append(names, name)
@@ -631,6 +644,52 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 	_, err := app.store.save("subscriptions", Object{"id": item["id"], "files": names, "lastSync": now()})
 	app.engine.reschedule()
 	return err
+}
+
+// writeSyncSummary 按变化类型分组输出同步结果。文件多时只列变化项，
+// 未变化的只给数量，避免日志被大量无改动文件淹没。
+func writeSyncSummary(writer io.Writer, added, updated, unchanged, removed, createdTasks, updatedTasks []string) {
+	sort.Strings(added)
+	sort.Strings(updated)
+	sort.Strings(removed)
+	fmt.Fprintf(writer, "本次同步：新增 %d，更新 %d，未变化 %d，删除 %d\n",
+		len(added), len(updated), len(unchanged), len(removed))
+	if len(added) > 0 {
+		fmt.Fprintf(writer, "\n[新增文件 %d]\n", len(added))
+		for _, name := range added {
+			fmt.Fprintln(writer, "  +", name)
+		}
+	}
+	if len(updated) > 0 {
+		fmt.Fprintf(writer, "\n[更新文件 %d]\n", len(updated))
+		for _, name := range updated {
+			fmt.Fprintln(writer, "  ~", name)
+		}
+	}
+	if len(removed) > 0 {
+		fmt.Fprintf(writer, "\n[删除文件 %d]\n", len(removed))
+		for _, name := range removed {
+			fmt.Fprintln(writer, "  -", name)
+		}
+	}
+	if len(createdTasks) > 0 {
+		fmt.Fprintf(writer, "\n[新建任务 %d]\n", len(createdTasks))
+		for _, name := range createdTasks {
+			fmt.Fprintln(writer, "  +", name)
+		}
+	}
+	if len(updatedTasks) > 0 {
+		fmt.Fprintf(writer, "\n[更新任务 %d]\n", len(updatedTasks))
+		for _, name := range updatedTasks {
+			fmt.Fprintln(writer, "  ~", name)
+		}
+	}
+	if len(unchanged) > 0 {
+		fmt.Fprintf(writer, "\n[未变化 %d] %s\n", len(unchanged), strings.Join(unchanged, "、"))
+	}
+	if len(added)+len(updated)+len(removed) == 0 && len(createdTasks)+len(updatedTasks) == 0 {
+		fmt.Fprintln(writer, "\n所有文件与任务均无变化。")
+	}
 }
 
 func (app *App) cleanup() (int, error) {
