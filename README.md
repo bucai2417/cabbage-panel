@@ -103,6 +103,44 @@ Go 后端、Vue 3 前端、SQLite 数据库，前端静态资源嵌入单个程�
 
 ## 快速开始
 
+### Linux 一键安装（推荐）
+
+一条命令完成下载、校验、创建用户、注册 systemd 服务：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bucai2417/cabbage-panel/main/scripts/install.sh | sudo bash
+```
+
+安装后访问 `http://<服务器IP>:5700`。首次启动的设置密钥在日志里：
+
+```bash
+journalctl -u cabbage -n 20 --no-pager | grep 首次设置密钥
+```
+
+自定义安装目录、端口或版本：
+
+```bash
+# 装到 /srv/cabbage，监听 8080
+curl -fsSL .../install.sh | sudo bash -s -- --dir /srv/cabbage --port 8080
+
+# 安装指定版本
+curl -fsSL .../install.sh | sudo bash -s -- --version 1.0.1
+```
+
+也可以先下载再执行，支持更多子命令：
+
+```bash
+curl -fsSL .../install.sh -o install.sh
+sudo bash install.sh status      # 查看状态
+sudo bash install.sh upgrade     # 升级到最新版，保留数据
+sudo bash install.sh uninstall   # 卸载，保留数据目录
+sudo bash install.sh uninstall --purge   # 连数据一起删
+```
+
+脚本会校验 Release 的 SHA-256；下载失败、校验不通过会直接退出，不会留下半装状态。程序原子替换，升级不会中断已有数据。默认安装到 `/opt/cabbage`，数据在 `/opt/cabbage/data`。
+
+只支持 Linux amd64 / arm64。macOS 和 Windows 用下面的直接运行方式。
+
 ### 直接运行
 
 支持 **Windows / Linux / macOS** 的 **amd64 与 arm64**。运行脚本需要 Python、Node.js 和 Bash；缺少时不必手动安装，登录后在「设置 → 运行环境」一键安装即可。
@@ -310,7 +348,7 @@ go vet ./...
 
 浏览器测试使用独立数据目录和 `127.0.0.1:15700`，不操作正式数据。构建程序后执行 `npm --prefix web run test:e2e`；Windows 使用本机 Edge，Linux CI 安装 Playwright Chromium。Linux 可运行 `go test -race ./...`。
 
-systemd 示例在 `deploy/cabbage.service`。创建独立 cabbage 用户，将程序和数据放入 `/opt/cabbage`；原生在线更新需要该用户拥有程序目录写权限。
+systemd 模板在 `deploy/cabbage.service`（一键安装脚本会按你的目录和端口自动生成）。手动部署时创建独立 cabbage 用户，将程序和数据放入 `/opt/cabbage`；原生在线更新需要该用户拥有程序目录写权限。
 
 ## 目录结构
 

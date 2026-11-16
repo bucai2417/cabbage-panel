@@ -187,6 +187,62 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -TargetOS darwin -T
 
 -SkipWeb 仅适用于已成功构建当前源码的前端且前端没有继续改动的情况。Go 通过 web/embed.go 嵌入 web/dist，直接编译 Go 不会自动重新构建 Vue。
 
+## Linux 一键安装
+
+`scripts/install.sh` 从 GitHub Release 下载对应架构的二进制，校验 SHA-256，创建系统用户并注册 systemd 服务。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bucai2417/cabbage-panel/main/scripts/install.sh | sudo bash
+```
+
+### 参数
+
+| 参数 | 说明 |
+| --- | --- |
+| `--dir <路径>` | 安装目录，默认 `/opt/cabbage` |
+| `--port <端口>` | 监听端口，默认 `5700` |
+| `--version <版本>` | 指定版本，如 `1.0.1`；默认取最新 Release |
+| `--no-service` | 只安装程序，不创建 systemd 服务 |
+| `--purge` | 卸载时同时删除数据目录 |
+
+### 子命令
+
+下载后执行可指定动作：
+
+```bash
+curl -fsSL .../install.sh -o install.sh
+sudo bash install.sh status       # 服务状态 + 已安装版本 + 目录
+sudo bash install.sh upgrade      # 升级到最新版，保留数据
+sudo bash install.sh uninstall    # 卸载，保留数据目录
+```
+
+### 行为说明
+
+- **架构自动识别**：`uname -m` 映射到 amd64 / arm64，其他架构直接报错退出。
+- **SHA-256 校验**：从 Release 下载 `SHA256SUMS` 比对，不匹配立即退出。
+- **原子替换**：先写 `cabbage.new` 再 `mv`，替换过程中断也不会损坏程序。
+- **升级保留数据**：只替换二进制，`data/` 目录不动。
+- **服务用户**：创建无登录权限的系统用户 `cabbage`，程序目录归属该用户。原生在线更新需要这个写权限。
+- **失败即停**：`set -euo pipefail`，任何步骤失败都退出，不会留下半装状态。
+
+生成的 systemd 服务内容与 `deploy/cabbage.service` 一致，只是把目录和端口换成你指定的值。在线更新依赖 `Restart=always` 重新拉起新版本。
+
+### 安装后
+
+```bash
+systemctl status cabbage        # 状态
+systemctl restart cabbage       # 重启
+journalctl -u cabbage -f        # 跟踪日志
+journalctl -u cabbage -n 20 --no-pager | grep 首次设置密钥   # 取首次密钥
+```
+
+### 卸载
+
+```bash
+sudo bash install.sh uninstall          # 保留 /opt/cabbage/data
+sudo bash install.sh uninstall --purge  # 连数据一起删
+```
+
 ## Linux / macOS 构建
 
 ~~~sh
