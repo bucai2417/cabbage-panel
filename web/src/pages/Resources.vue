@@ -102,7 +102,7 @@ const fields = computed(() => props.kind === 'envs' ? [
   { key: 'schedule', label: '同步 Cron', placeholder: '0 */6 * * *', hint: '留空表示仅手动同步。' },
   { key: 'whitelist', label: '文件白名单（正则）', placeholder: '留空同步全部支持的脚本' },
   { key: 'blacklist', label: '文件黑名单（正则）' },
-  { key: 'autoAddCron', label: '根据脚本头部 cron 注释自动创建任务', type: 'checkbox', hint: '扫描前 50 行注释，支持 # cron "0 8 * * *"、// cron: ... 和块注释；任务名取脚本文件名，重复同步会更新计划。' },
+  { key: 'autoAddCron', label: '根据脚本头部 cron 注释自动创建任务', type: 'checkbox', hint: '扫描前 50 行，支持 # cron "0 8 * * *"、// cron: ... 和块注释；任务名优先取 new Env 里的名称，没有则用脚本文件名。' },
   { key: 'autoDelCron', label: '同步删除源仓库中已移除的脚本与关联任务', type: 'checkbox' },
 ])
 function edit(item) { modal.value = item ? { ...item } : props.kind === 'envs' ? { name: '', value: '', remarks: '' } : props.kind === 'dependencies' ? { name: '', type: category.value, remark: '' } : { name: '', type: 'git-repo', url: '', alias: '', branch: '', schedule: '0 */6 * * *', whitelist: '', blacklist: '', autoAddCron: true, autoDelCron: false, schedule_type: 'crontab' } }

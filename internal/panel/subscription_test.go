@@ -103,6 +103,99 @@ func TestScriptHeaderCron(test *testing.T) {
 	}
 }
 
+func TestScriptHeaderEnvName(test *testing.T) {
+	for _, sample := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"python 注释单引号", "# new Env('中国联通');\nprint('x')\n", "中国联通"},
+		{"python 注释双引号", "# new Env(\"JD_COOKIE\")\n", "JD_COOKIE"},
+		{"js 代码形式", "const $ = new Env('京东资产统计');\n", "京东资产统计"},
+		{"js 块注释", "/*\n * new Env('南方航空签到');\n * cron: 22 8 * * *\n */\n", "南方航空签到"},
+		{"无空格写法", "const $=new Env('vx富士instax玩拍由我俱乐部')\n", "vx富士instax玩拍由我俱乐部"},
+		{"多空格", "const $ = new Env(  '顾家家居'  )\n", "顾家家居"},
+		{"没有 new Env", "# cron: 0 8 * * *\nprint('x')\n", ""},
+		{"超出前 50 行", strings.Repeat("pass\n", 50) + "new Env('太晚了')\n", ""},
+		{"空字符串", "new Env('')\n", ""},
+	} {
+		test.Run(sample.name, func(test *testing.T) {
+			if got := scriptHeaderEnvName(sample.content); got != sample.want {
+				test.Fatalf("scriptHeaderEnvName(%q) = %q, want %q", sample.content, got, sample.want)
+			}
+		})
+	}
+}
+
+func TestAutoTaskUsesEnvNameAndFallsBackToFilename(test *testing.T) {
+	panel := setupPanel(test)
+	var body atomic.Value
+	body.Store("# cron: 0 8 * * *\n# new Env('中国联通签到')\nprint('ok')\n")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(body.Load().(string)))
+	}))
+	defer server.Close()
+
+	item := panel.data(test, "POST", "/api/subscriptions", Object{
+		"name": "env 名称订阅", "type": "file", "url": server.URL + "/unicom.py",
+		"alias": "unicom", "schedule": "", "autoAddCron": true,
+	}).(map[string]any)
+	sync := func() {
+		test.Helper()
+		runs := panel.data(test, "PUT", "/api/subscriptions/run", []int64{integer(item["id"])}).([]any)
+		if result := panel.finished(test, integer(runs[0].(map[string]any)["runId"])); result["status"] != "success" {
+			test.Fatal(result)
+		}
+	}
+
+	sync()
+	tasks, _ := panel.app.store.list("crons")
+	if len(tasks) != 1 || text(tasks[0]["name"]) != "中国联通签到" {
+		test.Fatalf("任务名应取 new Env 名称: %v", tasks)
+	}
+	taskID := integer(tasks[0]["id"])
+
+	// 没有 new Env 时退回文件名。
+	body.Store("# cron: 0 9 * * *\nprint('ok')\n")
+	sync()
+	tasks, _ = panel.app.store.list("crons")
+	if len(tasks) != 1 || integer(tasks[0]["id"]) != taskID || text(tasks[0]["name"]) != "unicom.py" {
+		test.Fatalf("无 new Env 时应回退文件名: %v", tasks)
+	}
+}
+
+func TestAutoTaskDeduplicatesEnvNames(test *testing.T) {
+	panel := setupPanel(test)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// 两个不同文件都写同一个 new Env 名称。
+		_, _ = writer.Write([]byte("# cron: 0 8 * * *\n# new Env('每日签到')\nprint('ok')\n"))
+	}))
+	defer server.Close()
+
+	for _, alias := range []string{"repoA", "repoB"} {
+		item := panel.data(test, "POST", "/api/subscriptions", Object{
+			"name": alias, "type": "file", "url": server.URL + "/daily.py",
+			"alias": alias, "schedule": "", "autoAddCron": true,
+		}).(map[string]any)
+		runs := panel.data(test, "PUT", "/api/subscriptions/run", []int64{integer(item["id"])}).([]any)
+		if result := panel.finished(test, integer(runs[0].(map[string]any)["runId"])); result["status"] != "success" {
+			test.Fatal(result)
+		}
+	}
+
+	tasks, _ := panel.app.store.list("crons")
+	names := map[string]bool{}
+	for _, task := range tasks {
+		names[text(task["name"])] = true
+	}
+	if len(tasks) != 2 {
+		test.Fatalf("应创建两个任务: %v", tasks)
+	}
+	if !names["每日签到"] || !names["每日签到 (2)"] {
+		test.Fatalf("重名应自动加后缀: %v", names)
+	}
+}
+
 func TestFileSubscriptionUpdatesCronFromHeader(test *testing.T) {
 	panel := setupPanel(test)
 	var body atomic.Value
@@ -122,7 +215,8 @@ func TestFileSubscriptionUpdatesCronFromHeader(test *testing.T) {
 	}
 	sync()
 	tasks, _ := panel.app.store.list("crons")
-	if len(tasks) != 1 || text(tasks[0]["name"]) != "daily.py" || text(tasks[0]["schedule"]) != "0 8 * * *" {
+	// new Env 里的名称优先作为任务名。
+	if len(tasks) != 1 || text(tasks[0]["name"]) != "SHOULD_NOT_CREATE" || text(tasks[0]["schedule"]) != "0 8 * * *" {
 		test.Fatalf("auto task mismatch: %v", tasks)
 	}
 	taskID := integer(tasks[0]["id"])

@@ -325,6 +325,11 @@ const scriptHeaderLineLimit = 50
 
 var cronAnnotationPattern = regexp.MustCompile(`(?i)@?cron\b\s*[:=]?\s*`)
 
+// envNamePattern 匹配青龙脚本里的 new Env('名称') / Env("名称")。
+// 注释形式（# new Env('x')、* new Env('x')）和代码形式（const $ = new Env('x')）
+// 都能命中，因为匹配的是 Env 调用本身，不关心前面的注释符号。
+var envNamePattern = regexp.MustCompile(`\bEnv\s*\(\s*['"]([^'"]+)['"]\s*\)`)
+
 // scriptHeaderComments 提取脚本前 50 行的注释文本，支持 #、// 与块注释。
 func scriptHeaderComments(content string) string {
 	lines := strings.Split(content, "\n")
@@ -371,6 +376,40 @@ func scriptHeaderComments(content string) string {
 		}
 	}
 	return builder.String()
+}
+
+// scriptHeaderEnvName 从脚本前 50 行提取 new Env('名称') 里的名称，用作任务名。
+// 注释与代码形式都识别；找不到返回空串，调用方回退到文件名。
+func scriptHeaderEnvName(content string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > scriptHeaderLineLimit {
+		lines = lines[:scriptHeaderLineLimit]
+	}
+	for _, line := range lines {
+		match := envNamePattern.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		name := strings.TrimSpace(match[1])
+		if name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+// uniqueTaskName 在名称已存在时追加序号，避免多个脚本用同一个 new Env 名称时
+// 任务列表里出现难以区分的重名。
+func uniqueTaskName(name string, used map[string]bool) string {
+	if !used[name] {
+		return name
+	}
+	for index := 2; ; index++ {
+		candidate := fmt.Sprintf("%s (%d)", name, index)
+		if !used[candidate] {
+			return candidate
+		}
+	}
 }
 
 // scriptHeaderCron 从脚本头部注释中提取第一条可解析的 cron 表达式。
@@ -501,8 +540,11 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 	current := map[string]bool{}
 	tasks, _ := app.store.list("crons")
 	byCommand := map[string]Object{}
+	// 任务名去重：多个脚本可能写同一个 new Env 名称。
+	usedNames := map[string]bool{}
 	for _, task := range tasks {
 		byCommand[text(task["command"])] = task
+		usedNames[text(task["name"])] = true
 	}
 	for relative, content := range files {
 		targetName := alias + "/" + relative
@@ -518,21 +560,32 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 		if boolean(item["autoAddCron"]) {
 			if spec := scriptHeaderCron(content); spec != "" {
 				command := "task " + shellQuote(targetName)
-				taskName := filepath.Base(relative)
+				// 任务名优先取 new Env('名称')，没有则退回文件名。
+				taskName := scriptHeaderEnvName(content)
+				if taskName == "" {
+					taskName = filepath.Base(relative)
+				}
 				if existing, found := byCommand[command]; found {
 					if integer(existing["subscriptionId"]) == integer(item["id"]) {
+						update := Object{"id": existing["id"], "schedule": spec}
+						// 脚本里的 new Env 名称变了，同步更新任务名。
+						if text(existing["name"]) != taskName {
+							update["name"] = taskName
+						}
+						saved, err := app.store.save("crons", update)
+						if err != nil {
+							return err
+						}
+						byCommand[command] = saved
 						if text(existing["schedule"]) != spec {
-							saved, err := app.store.save("crons", Object{"id": existing["id"], "schedule": spec})
-							if err != nil {
-								return err
-							}
-							byCommand[command] = saved
-							fmt.Fprintf(writer, "更新任务计划 %s（%s）\n", text(existing["name"]), spec)
+							fmt.Fprintf(writer, "更新任务计划 %s（%s）\n", taskName, spec)
 						}
 					} else {
 						fmt.Fprintf(writer, "任务已存在，跳过自动创建：%s\n", command)
 					}
 				} else {
+					taskName = uniqueTaskName(taskName, usedNames)
+					usedNames[taskName] = true
 					saved, err := app.store.save("crons", defaults("crons", Object{"name": taskName, "command": command, "schedule": spec, "subscriptionId": item["id"]}))
 					if err != nil {
 						return err
