@@ -187,11 +187,13 @@ func (app *App) systemAPI(writer http.ResponseWriter, request *http.Request, tai
 }
 
 func (app *App) downloadText(ctx context.Context, address string, limit int64) (string, error) {
-	parsed, err := url.Parse(address)
+	// GitHub blob 页面地址返回 HTML，自动换成 raw 原始文件地址。
+	target, converted := normalizeDownloadURL(address)
+	parsed, err := url.Parse(target)
 	if err != nil || !contains([]string{"http", "https"}, parsed.Scheme) || parsed.Host == "" || parsed.User != nil {
 		return "", errors.New("下载地址无效")
 	}
-	request, err := http.NewRequestWithContext(ctx, "GET", address, nil)
+	request, err := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if err != nil {
 		return "", err
 	}
@@ -202,6 +204,10 @@ func (app *App) downloadText(ctx context.Context, address string, limit int64) (
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
 		return "", fmt.Errorf("下载失败 HTTP %d", response.StatusCode)
+	}
+	// 转换过却仍返回网页，说明路径写错或仓库不可见；直接报错，避免把 HTML 存成脚本。
+	if converted && strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/html") {
+		return "", errors.New("该地址返回网页而非脚本文件，请确认文件路径与仓库可见性")
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {

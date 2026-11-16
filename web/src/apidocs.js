@@ -387,7 +387,7 @@ export const apiGroups = [
       },
       {
         id: 'scripts-download', method: 'POST', path: '/scripts/download', scope: 'scripts', tabs: openAndApi,
-        summary: '下载远程脚本', description: '从 HTTP(S) URL 拉取脚本保存到脚本目录。',
+        summary: '下载远程脚本', description: '从 HTTP(S) URL 拉取脚本保存到脚本目录。GitHub blob 页面链接会自动转为 raw 原始文件链接；转换后仍返回网页则报错。',
         body: { url: 'https://example.com/hello.py', filename: 'hello.py', path: '' },
         response: { code: 200, data: null },
       },
@@ -555,7 +555,7 @@ export const apiGroups = [
     id: 'subscriptions',
     label: '订阅同步',
     icon: 'GitBranch',
-    intro: '订阅 HTTP(S) Git 仓库或单文件。type 取 git-repo、file；alias 只能包含字母、数字、下划线和连字符。开启 autoAddCron 后扫描脚本前 50 行注释中的 cron 声明，按脚本文件名创建或更新任务；new Env 仅表示变量名，不会自动创建变量。',
+    intro: '订阅 HTTP(S) Git 仓库或单文件。type 取 git-repo、file；alias 只能包含字母、数字、下划线和连字符。file 类型支持 GitHub blob 页面链接，会自动转为 raw 链接；git-repo 类型需填仓库地址。开启 autoAddCron 后扫描脚本前 50 行注释中的 cron 声明，按脚本文件名创建或更新任务；new Env 仅表示变量名，不会自动创建变量。',
     endpoints: [
       {
         id: 'subs-list', method: 'GET', path: '/subscriptions', scope: 'subscriptions', tabs: openAndApi,

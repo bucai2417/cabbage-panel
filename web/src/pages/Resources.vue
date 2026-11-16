@@ -96,7 +96,7 @@ const fields = computed(() => props.kind === 'envs' ? [
 ] : [
   { key: 'name', label: '订阅名称', required: true },
   { key: 'type', label: '订阅类型', type: 'select', options: [{ value: 'git-repo', label: 'Git 仓库' }, { value: 'file', label: '单个脚本文件' }] },
-  { key: 'url', label: '订阅 URL', required: true, placeholder: 'https://github.com/owner/repo.git' },
+  { key: 'url', label: '订阅 URL', required: true, placeholder: 'https://github.com/owner/repo.git', hint: '单个脚本文件支持 GitHub blob 链接，会自动转为 raw 链接；Git 仓库类型请填仓库地址。' },
   { key: 'alias', label: '目录别名', required: true, placeholder: 'my-scripts', hint: '字母、数字、连字符或下划线，脚本同步到 scripts/别名/。' },
   { key: 'branch', label: 'Git 分支', placeholder: '留空使用默认分支' },
   { key: 'schedule', label: '同步 Cron', placeholder: '0 */6 * * *', hint: '留空表示仅手动同步。' },

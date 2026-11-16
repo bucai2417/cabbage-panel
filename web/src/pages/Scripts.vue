@@ -88,7 +88,7 @@ const fields = computed(() => {
   if (type === 'remote') return [
     { key: 'directory', label: '目标文件夹', type: 'select', options: [{ value: '', label: '/（根目录）' }, ...directories.value.map(file => ({ value: file.path, label: file.path }))] },
     { key: 'filename', label: '保存文件名', required: true, placeholder: 'example.py', hint: '可带子目录，例如 tools/example.py。' },
-    { key: 'url', label: '外链地址', required: true, placeholder: 'https://example.com/script.py', hint: '仅支持 HTTP(S)，最大 4MB，内容需为 UTF-8 文本。' },
+    { key: 'url', label: '外链地址', required: true, placeholder: 'https://example.com/script.py', hint: '仅支持 HTTP(S)，最大 4MB，内容需为 UTF-8 文本。GitHub blob 链接会自动转为 raw 链接。' },
   ]
   if (['file', 'folder'].includes(type)) return [{ key: 'filename', label: type === 'folder' ? '文件夹路径' : '文件路径', required: true, placeholder: type === 'folder' ? '工具/每日任务' : '工具/example.py', hint: '路径使用 / 分隔，支持中文名称。' }]
   if (type === 'rename') return [{ key: 'destination', label: '新路径', required: true }]
