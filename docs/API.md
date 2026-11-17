@@ -56,7 +56,7 @@ JSON 使用 UTF-8。成功为 {code:200,data:...}，错误为对应 HTTP 状态�
 | 依赖详情 | GET /dependencies/:id | 含最新安装日志 |
 | 依赖操作 | PUT /dependencies/reinstall,cancel | ID 数组 |
 | 移除记录 | DELETE /dependencies/force | ID 数组，不卸载文件 |
-| 订阅管理 | GET / POST / PUT / DELETE /subscriptions | POST/PUT 对象；type=git-repo/file、url、alias、name、schedule、branch、whitelist、blacklist、autoAddCron、autoDelCron；autoAddCron 扫描脚本前 50 行注释中的 cron，任务名优先取 new Env('名称')，没有则用脚本文件名 |
+| 订阅管理 | GET / POST / PUT / DELETE /subscriptions | POST/PUT 对象；type=git-repo/file、url、alias、name、schedule、branch、whitelist、blacklist、autoAddCron、autoDelCron；autoAddCron 扫描脚本前 50 行注释中的 cron，只为新增脚本建任务，任务名优先取 new Env('名称') |
 | 订阅操作 | PUT /subscriptions/run,stop,enable,disable | ID 数组 |
 | 订阅日志 | GET /subscriptions/:id/log、/:id/logs | 最新文本 / 运行数组 |
 | 应用管理 | GET / POST / PUT / DELETE /api/apps | name/scopes/expiresAt；创建返回 client_id/client_secret（secret 只返回一次）；列表与详情不返回 client_secret，数据库仅保存散列 |

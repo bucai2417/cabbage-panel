@@ -291,3 +291,67 @@ func TestSubscriptionLogGroupsChanges(test *testing.T) {
 		test.Fatalf("内容变化日志不符:\n%s", third)
 	}
 }
+
+func TestExistingScriptDoesNotRecreateTask(test *testing.T) {
+	panel := setupPanel(test)
+	var body atomic.Value
+	body.Store("# cron: 0 8 * * *\nnew Env('签到一')\nprint('ok')\n")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(body.Load().(string)))
+	}))
+	defer server.Close()
+
+	item := panel.data(test, "POST", "/api/subscriptions", Object{
+		"name": "已有脚本", "type": "file", "url": server.URL + "/a.py",
+		"alias": "existing", "schedule": "", "autoAddCron": true,
+	}).(map[string]any)
+	sync := func() string {
+		test.Helper()
+		runs := panel.data(test, "PUT", "/api/subscriptions/run", []int64{integer(item["id"])}).([]any)
+		runID := integer(runs[0].(map[string]any)["runId"])
+		if result := panel.finished(test, runID); result["status"] != "success" {
+			test.Fatal(result)
+		}
+		log, err := os.ReadFile(filepath.Join(panel.app.root, "logs", fmt.Sprintf("%d.log", runID)))
+		if err != nil {
+			test.Fatal(err)
+		}
+		return string(log)
+	}
+
+	// 首次同步：脚本是新的，自动创建任务。
+	sync()
+	tasks, _ := panel.app.store.list("crons")
+	if len(tasks) != 1 || text(tasks[0]["name"]) != "签到一" {
+		test.Fatalf("首次同步应创建任务: %v", tasks)
+	}
+
+	// 手动删除任务，模拟用户不想要它。
+	if err := panel.app.store.remove("crons", integer(tasks[0]["id"])); err != nil {
+		test.Fatal(err)
+	}
+
+	// 再次同步：脚本上次就在，不应自动重建任务。
+	log := sync()
+	tasks, _ = panel.app.store.list("crons")
+	if len(tasks) != 0 {
+		test.Fatalf("已有脚本不应重建任务，实际: %v", tasks)
+	}
+	if !strings.Contains(log, "已有脚本，不自动建任务") {
+		test.Fatalf("日志应说明跳过原因:\n%s", log)
+	}
+
+	// 新建一个全新的订阅（没有上次同步记录），属于新脚本，应正常建任务。
+	fresh := panel.data(test, "POST", "/api/subscriptions", Object{
+		"name": "新订阅", "type": "file", "url": server.URL + "/b.py",
+		"alias": "fresh", "schedule": "", "autoAddCron": true,
+	}).(map[string]any)
+	runs := panel.data(test, "PUT", "/api/subscriptions/run", []int64{integer(fresh["id"])}).([]any)
+	if result := panel.finished(test, integer(runs[0].(map[string]any)["runId"])); result["status"] != "success" {
+		test.Fatal(result)
+	}
+	tasks, _ = panel.app.store.list("crons")
+	if len(tasks) != 1 || text(tasks[0]["name"]) != "签到一" {
+		test.Fatalf("全新订阅应创建任务: %v", tasks)
+	}
+}

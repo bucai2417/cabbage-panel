@@ -549,7 +549,15 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 	}
 	// 按变化类型分组，最后统一输出，便于看清本次同步到底动了哪些文件。
 	var added, updated, unchanged []string
-	var createdTasks, updatedTasks []string
+	var createdTasks, updatedTasks, skippedTasks []string
+	// 上次同步记录过的文件。只有不在其中的脚本才算「本次新增」，才自动建任务；
+	// 已有脚本即使当前没有对应任务也不再创建，避免用户手动删了任务又被同步建回来。
+	previousFiles := map[string]bool{}
+	if previous, valid := item["files"].([]any); valid {
+		for _, value := range previous {
+			previousFiles[text(value)] = true
+		}
+	}
 	for relative, content := range files {
 		targetName := alias + "/" + relative
 		target, err := safePath(filepath.Join(app.root, "scripts"), targetName)
@@ -593,6 +601,10 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 							updatedTasks = append(updatedTasks, fmt.Sprintf("%s（%s）", taskName, spec))
 						}
 					}
+				} else if previousFiles[targetName] {
+					// 脚本上次同步就在，说明是已有脚本：不再自动创建任务，
+					// 无论当前有没有对应任务。用户想手动建就自己建。
+					skippedTasks = append(skippedTasks, taskName)
 				} else {
 					taskName = uniqueTaskName(taskName, usedNames)
 					usedNames[taskName] = true
@@ -636,7 +648,7 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 			}
 		}
 	}
-	writeSyncSummary(writer, added, updated, unchanged, removed, createdTasks, updatedTasks)
+	writeSyncSummary(writer, added, updated, unchanged, removed, createdTasks, updatedTasks, skippedTasks)
 	names := []string{}
 	for name := range current {
 		names = append(names, name)
@@ -648,7 +660,7 @@ func (app *App) syncSubscription(ctx context.Context, item Object, writer io.Wri
 
 // writeSyncSummary 按变化类型分组输出同步结果。文件多时只列变化项，
 // 未变化的只给数量，避免日志被大量无改动文件淹没。
-func writeSyncSummary(writer io.Writer, added, updated, unchanged, removed, createdTasks, updatedTasks []string) {
+func writeSyncSummary(writer io.Writer, added, updated, unchanged, removed, createdTasks, updatedTasks, skippedTasks []string) {
 	sort.Strings(added)
 	sort.Strings(updated)
 	sort.Strings(removed)
@@ -682,6 +694,12 @@ func writeSyncSummary(writer io.Writer, added, updated, unchanged, removed, crea
 		fmt.Fprintf(writer, "\n[更新任务 %d]\n", len(updatedTasks))
 		for _, name := range updatedTasks {
 			fmt.Fprintln(writer, "  ~", name)
+		}
+	}
+	if len(skippedTasks) > 0 {
+		fmt.Fprintf(writer, "\n[已有脚本，不自动建任务 %d]\n", len(skippedTasks))
+		for _, name := range skippedTasks {
+			fmt.Fprintln(writer, "  ·", name)
 		}
 	}
 	if len(unchanged) > 0 {

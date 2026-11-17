@@ -555,7 +555,7 @@ export const apiGroups = [
     id: 'subscriptions',
     label: '订阅同步',
     icon: 'GitBranch',
-    intro: '订阅 HTTP(S) Git 仓库或单文件。type 取 git-repo、file；alias 只能包含字母、数字、下划线和连字符。file 类型支持 GitHub blob 页面链接，会自动转为 raw 链接；git-repo 类型需填仓库地址。开启 autoAddCron 后扫描脚本前 50 行注释中的 cron 声明，任务名优先取 new Env 里的名称，没有则用脚本文件名；new Env 不会自动创建环境变量。',
+    intro: '订阅 HTTP(S) Git 仓库或单文件。type 取 git-repo、file；alias 只能包含字母、数字、下划线和连字符。file 类型支持 GitHub blob 页面链接，会自动转为 raw 链接；git-repo 类型需填仓库地址。开启 autoAddCron 后扫描脚本前 50 行注释中的 cron 声明，只有本次新增的脚本才自动创建任务，已有脚本不再自动建任务；任务名优先取 new Env 里的名称，没有则用脚本文件名；new Env 不会自动创建环境变量。',
     endpoints: [
       {
         id: 'subs-list', method: 'GET', path: '/subscriptions', scope: 'subscriptions', tabs: openAndApi,
@@ -570,7 +570,7 @@ export const apiGroups = [
       },
       {
         id: 'subs-create', method: 'POST', path: '/subscriptions', scope: 'subscriptions', tabs: openAndApi,
-        summary: '新增订阅', description: 'URL 必须是不含内嵌凭证的 HTTP(S) 地址；schedule 留空表示仅手动同步。autoAddCron 支持 # cron "0 8 * * *"、// cron: ... 和块注释；任务名优先取 new Env 里的名称，没有则用脚本文件名。',
+        summary: '新增订阅', description: 'URL 必须是不含内嵌凭证的 HTTP(S) 地址；schedule 留空表示仅手动同步。autoAddCron 支持 # cron "0 8 * * *"、// cron: ... 和块注释；只对本次新增的脚本自动建任务；任务名优先取 new Env 里的名称，没有则用脚本文件名。',
         body: { name: '脚本仓库', type: 'git-repo', url: 'https://github.com/owner/repo.git', alias: 'repo', branch: 'main', schedule: '0 */6 * * *', whitelist: '', blacklist: '', autoAddCron: true, autoDelCron: false },
         response: { code: 200, data: { id: 1, name: '脚本仓库' } },
       },
