@@ -83,10 +83,10 @@ select:hover{border-color:#b6dfcc}
 .day-bar:nth-child(6) .bar-track i{animation-delay:.29s}
 .day-bar:nth-child(7) .bar-track i{animation-delay:.34s}
 
-*{scrollbar-width:thin;scrollbar-color:#c9d8cf transparent}
+*{scrollbar-width:thin;scrollbar-color:var(--scrollbar-thumb) transparent}
 ::-webkit-scrollbar{width:9px;height:9px}
-::-webkit-scrollbar-thumb{background:#c9d8cf;border-radius:9px;border:2px solid transparent;background-clip:content-box}
-::-webkit-scrollbar-thumb:hover{background:#a9c0b4;background-clip:content-box}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:9px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover);background-clip:content-box}
 
 @media(max-width:520px){
 .confirm-overlay{padding:14px}

@@ -44,6 +44,10 @@
   --border-soft: #eff3f1;
   --border-strong: #d6e0da;
 
+  /* 滚动条（原生 scrollbar-color 与 WebKit 伪元素共用同一组色值） */
+  --scrollbar-thumb: #ccdcd3;
+  --scrollbar-thumb-hover: #b6c8bd;
+
   /* 分层阴影：一层贴边定形，一层远距扩散 */
   --shadow-xs: 0 1px 2px rgba(16, 42, 30, .04);
   --shadow-sm: 0 1px 2px rgba(16, 42, 30, .04), 0 4px 12px -4px rgba(16, 42, 30, .07);
@@ -59,6 +63,9 @@
 
   --ease: cubic-bezier(.22, 1, .36, 1);
   --ease-out: cubic-bezier(.16, 1, .3, 1);
+
+  /* 原生 UI（滚动条、日期选择器、自动填充）统一按浅色渲染 */
+  color-scheme: light;
 
   font-family: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
   color: var(--ink-body);
@@ -85,13 +92,15 @@ input, select, textarea {
   color: var(--ink);
   padding: 10px 12px;
   min-width: 0;
+  /* 一层内阴影让输入区在白色卡片上有轻微"凹陷"感，提升可辨识度 */
+  box-shadow: inset 0 1px 2px rgba(16, 42, 30, .05);
   transition: border-color .18s var(--ease), box-shadow .18s var(--ease), background .18s var(--ease);
 }
 input::placeholder, textarea::placeholder { color: var(--ink-faint); }
 input:hover, select:hover, textarea:hover { border-color: #c3d2c9; }
 input:focus, select:focus, textarea:focus {
   border-color: var(--green-bright);
-  box-shadow: 0 0 0 3px rgba(23, 201, 138, .16);
+  box-shadow: inset 0 1px 2px rgba(16, 42, 30, .05), 0 0 0 3px rgba(23, 201, 138, .16);
 }
 input[type=checkbox] { accent-color: var(--green); width: 15px; height: 15px; padding: 0; cursor: pointer; flex-shrink: 0; }
 textarea { resize: vertical; line-height: 1.65; }
@@ -113,16 +122,29 @@ code { line-height: 1.6; }
 
 /* ---- 浏览器表面：选区、滚动条 ---- */
 ::selection { background: rgba(23, 201, 138, .26); color: var(--ink); }
-* { scrollbar-width: thin; scrollbar-color: #cddbd3 transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: #d2ded7;
+  background: var(--scrollbar-thumb);
   border-radius: 20px;
   border: 3px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: #b6c8bd; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); background-clip: content-box; }
+
+/* ---- 渐进增强：更平滑的圆角与更好的换行 ----
+   corner-shape 只在支持它的浏览器（Chrome 139+）生效，其余保持普通圆角；
+   text-wrap: balance 让标题断行更均衡，pretty 减少段落末行孤字。 */
+.card, .stat-card, .recent-card, .settings-card, .login-card, .drop-card,
+.log-group-card, .log-viewer-card, .task-log-card, .task-stat-card,
+.modal, .log-modal, .confirm-dialog, .resource-card, .empty-state,
+.button, .icon-button, .page-tab, .sidebar nav button,
+input, select, textarea, .global-search, .badge {
+  corner-shape: squircle;
+}
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
 
 /* ---- 工具类 ---- */
 .muted { color: var(--ink-muted); font-size: 13px; }
