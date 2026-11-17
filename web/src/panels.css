@@ -178,8 +178,26 @@
   padding: 18px 24px;
   border-top: 1px solid var(--border-soft);
 }
-.settings-fields { padding: 22px 26px; display: flex; flex-direction: column; gap: 20px; }
-.settings-fields .field { max-width: 650px; }
+/* 设置字段：宽屏双列，窄屏回落单列。短输入两两并排，长文本/选项组仍占整行，
+   减少纵向长度，避免一路滚到底。 */
+.settings-fields {
+  padding: 22px 26px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 24px;
+  align-items: start;
+}
+.settings-fields .field { max-width: none; }
+/* 说明文字、横幅、按钮组、表单、列表等非字段内容占满整行 */
+.settings-fields > :not(.field) { grid-column: 1 / -1; }
+/* 多行文本、选项组、文件选择、令牌列表占满整行 */
+.settings-fields > .field:has(textarea),
+.settings-fields > .field:has(.scope-options),
+.settings-fields > .field:has(input[type="file"]),
+.settings-fields > .field:has(.mcp-token-list) { grid-column: 1 / -1; }
+@media (max-width: 1100px) {
+  .settings-fields { grid-template-columns: 1fr; }
+}
 .settings-fields > .info-banner { margin-bottom: 0; }
 .info-banner.danger { background: var(--red-soft); border-color: #f4dfd8; color: #a9453a; }
 .info-banner.danger > svg { color: #cf5a4d; }

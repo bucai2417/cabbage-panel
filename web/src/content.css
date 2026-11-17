@@ -11,6 +11,8 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 20px;
+  /* 给卡片倾斜提供透视，数值越大越"平"，1200px 接近轻微俯视 */
+  perspective: 1200px;
 }
 
 .stat-card {
@@ -24,11 +26,16 @@
   position: relative;
   overflow: hidden;
   min-height: 152px;
-  transition: transform .28s var(--ease), box-shadow .28s var(--ease), border-color .28s var(--ease);
+  /* 抬升用 translate（可平滑过渡），倾斜用 transform（跟随指针即时响应，
+     不加过渡才不会有拖影）。两者分开，互不影响。 */
+  translate: 0 var(--stat-lift, 0px);
+  transform: rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
+  transform-origin: center;
+  transition: translate .28s var(--ease), box-shadow .28s var(--ease), border-color .28s var(--ease);
 }
 @media (hover: hover) {
   .stat-card:hover {
-    transform: translateY(-3px);
+    --stat-lift: -3px;
     box-shadow: var(--shadow-md), 0 0 0 1px color-mix(in srgb, var(--card-accent) 22%, transparent);
     border-color: #d9e6de;
   }
