@@ -38,12 +38,11 @@ select:hover{border-color:#b6dfcc}
 .bulk-bar .danger-text{border-radius:6px;padding:4px 8px;transition:background .16s}
 .bulk-bar .danger-text:hover{background:#ffe9e6}
 
-/* 页面切换：淡入 + 轻推。@starting-style 让标签切换（display 变化）也能触发，
-   不只是首次挂载；过渡结束后 translate 自动回到 none，不残留层叠上下文，
-   避免把工具栏下拉菜单困在页面内部被后续卡片盖住。 */
+/* 页面切换：新页面淡入 + 轻推。display 不参与过渡——一旦让它过渡，旧页面会
+   在整个时长内保持可见，切换瞬间两个页面内容重叠，看起来像"上个页面没消失"。
+   这里旧页面立即隐藏，只有新页面做入场。 */
 .page-pane {
-  transition: opacity .3s var(--ease-out), translate .3s var(--ease-out), display .3s;
-  transition-behavior: allow-discrete;
+  transition: opacity .3s var(--ease-out), translate .3s var(--ease-out);
 }
 @starting-style { .page-pane { opacity: 0; translate: 0 8px; } }
 
