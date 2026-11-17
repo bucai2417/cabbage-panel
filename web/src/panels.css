@@ -313,44 +313,44 @@
 .field.checkbox input { width: 16px; height: 16px; }
 .field.checkbox small { grid-column: 1 / -1; }
 
-/* ---- 浮动标签：标签初始在输入框内，聚焦或有值时浮到上边框线上并缩小 ----
-   只对「带 placeholder 的单行输入框」生效：浮标依赖 :placeholder-shown 判断空值，
-   而 select / textarea / 无 placeholder 的输入框无法可靠判定，保持原样。
-   结构要求：label.field > span（标签）+ input（必须有 placeholder）+ small（说明）。 */
-.field:has(> input[placeholder]) { position: relative; gap: 0; }
-.field:has(> input[placeholder]) > span {
+/* ---- 浮动 placeholder：输入框内的提示词随聚焦/输入上浮到上边框线 ----
+   原生 placeholder 会被输入框裁剪、无法移出框外，因此由 float-label.js 读取
+   提示文本、插入 .float-label 承担显示，原生 placeholder 换成空格以保持
+   :placeholder-shown 可用（CSS 正是用它判断框内是否为空）。
+   浮标位置由 JS 测量的 --float-rest / --float-lifted 决定，不依赖固定像素。 */
+.field.float-wrap { position: relative; }
+.field > span.float-label {
   position: absolute;
   left: 13px;
-  top: 21px;
+  top: var(--float-rest, 50%);
+  translate: 0 -50%;
   z-index: 1;
   pointer-events: none;
+  max-width: calc(100% - 26px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--ink-muted);
-  transform-origin: left center;
+  line-height: 1.2;
+  font-weight: 400;
+  color: var(--ink-faint);
   transition: top .18s var(--ease), font-size .18s var(--ease),
-              color .18s var(--ease), padding .18s var(--ease), background .18s var(--ease);
+              color .18s var(--ease), padding .18s var(--ease),
+              background .18s var(--ease);
 }
-.field:has(> input[placeholder]) > input {
-  padding: 20px 12px 8px;
-  transition: border-color .18s var(--ease), box-shadow .18s var(--ease), background .18s var(--ease);
-}
-/* 与浮动输入框同高的 select，保证双列并排时底边对齐 */
-.field:has(> select) > select { padding-top: 20px; padding-bottom: 8px; }
-/* 聚焦、或已有内容时，标签浮到边框线上 */
-.field:has(> input[placeholder]):focus-within > span,
-.field:has(> input[placeholder]:not(:placeholder-shown)) > span {
-  top: -6px;
-  left: 9px;
+/* 聚焦或有值时浮到边框线上并缩小 */
+.float-wrap:focus-within > .float-label,
+.float-wrap > input:not(:placeholder-shown) + .float-label {
+  top: var(--float-lifted, 0);
   font-size: 10px;
   font-weight: 600;
   color: var(--green-strong);
   padding: 0 5px;
   background: var(--surface);
 }
-.field:has(> input[placeholder]) > small { margin-top: 8px; }
-/* 必填星号跟随标签一起移动，不需要额外定位 */
-.field:has(> input[placeholder]) > span i { color: var(--red); }
+@media (prefers-reduced-motion: reduce) {
+  .float-label { transition: none; }
+}
 
 .modal footer, .terminal-wrap footer {
   border-top: 1px solid var(--border-soft);
